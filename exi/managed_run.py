@@ -97,12 +97,33 @@ def _group_alive(pgid: int) -> bool:
         return False
 
 
+def _reap_owned_leader(pgid: int) -> None:
+    """Best-effort, non-blocking reap of `pgid`'s leader if it's our child.
+
+    We always spawn the group leader ourselves (its pid == pgid), so we are
+    its parent and this can only ever collect that one already-owned
+    process -- never anything unrelated, since `waitpid` refuses to reap
+    processes that are not our own children.
+
+    This matters because a signalled-but-unreaped process is a zombie, and
+    on Linux (unlike macOS/BSD) `killpg(pgid, 0)` still reports a zombie as
+    "alive" until something reaps it. Without this, a liveness check made
+    right after termination can never observe the process as gone.
+    """
+    try:
+        os.waitpid(pgid, os.WNOHANG)
+    except ChildProcessError:
+        pass
+
+
 def terminate_group(pgid: int, grace_seconds: float, owned_pgids: set) -> str:
     """Escalate SIGTERM -> grace -> SIGKILL against an OWNED process group only.
 
     Refuses any pgid not in `owned_pgids`, and refuses this process's own group
     and pgid <= 1. Returns 'term', 'kill', 'already-gone', or raises
-    PermissionError for a non-owned target.
+    PermissionError for a non-owned target. Reaps the group leader itself
+    (see `_reap_owned_leader`) before returning, so callers observe the true
+    post-termination state instead of racing a zombie.
     """
     if pgid not in owned_pgids:
         raise PermissionError(f"refusing to signal non-owned process group {pgid}")
@@ -118,17 +139,36 @@ def terminate_group(pgid: int, grace_seconds: float, owned_pgids: set) -> str:
 
     deadline = time.time() + grace_seconds
     while time.time() < deadline:
+        _reap_owned_leader(pgid)
         if not _group_alive(pgid):
             return "term"
         time.sleep(0.1)
 
-    if _group_alive(pgid):
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except ProcessLookupError:
-            return "term"
-        return "kill"
-    return "term"
+    _reap_owned_leader(pgid)
+    if not _group_alive(pgid):
+        return "term"
+
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        return "term"
+
+    # SIGKILL is not maskable, so the leader dies almost immediately; reap
+    # it (bounded, not open-ended) so the caller's next liveness check sees
+    # the true post-kill state instead of a lingering zombie.
+    # Even a configured grace of zero still needs a brief reap window after
+    # SIGKILL; otherwise Linux can expose the just-killed leader as a zombie
+    # to the caller's immediate signal-0 liveness probe.
+    kill_reap_seconds = min(max(grace_seconds, 0.1), 2.0)
+    kill_deadline = time.time() + kill_reap_seconds
+    while True:
+        _reap_owned_leader(pgid)
+        if not _group_alive(pgid):
+            break
+        if time.time() >= kill_deadline:
+            break
+        time.sleep(0.02)
+    return "kill"
 
 
 def _breach(cfg: dict, state: dict, started_at: float, now: float) -> list:
