@@ -9,8 +9,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 
+from . import config
 from . import feedback as fb
+from . import feedback_detect as fbd
 from .store import STATUS_CONFIRMED, MIN_INDEPENDENT_EVIDENCE, Store
 
 
@@ -235,6 +238,117 @@ def cmd_fb_disable(args) -> int:
     return 0
 
 
+def cmd_fb_resolve(args) -> int:
+    """Resolve a pending, zero-click feedback candidate into a rule occurrence.
+
+    One-shot / idempotent / session+candidate bound / expiry-checked. The
+    evidence id is derived INTERNALLY from the candidate's stored prompt hash —
+    the caller never supplies one — so re-recording the same human prompt cannot
+    inflate a rule's count. This path can only add a new occurrence / new rule;
+    it can never disable, delete, or reconfigure an existing rule.
+    """
+    cfg = config.load_config()
+    ttl = fb.candidate_ttl_seconds(cfg)
+    now = time.time()
+    fbstore = fb.FeedbackStore()
+    st = fb.FeedbackState()
+    with st.locked() as state:
+        c = fb.get_candidate(state, args.candidate)
+        if c is None:
+            print(f"error: unknown or expired feedback candidate: {args.candidate}", file=sys.stderr)
+            return 2
+        if args.session and c.get("session_id") != args.session:
+            print("error: candidate belongs to a different session", file=sys.stderr)
+            return 2
+        status = c.get("status")
+        if status == fb.CANDIDATE_RESOLVED:
+            print(f"already resolved: {args.candidate} -> {c.get('rule', '?')}")
+            return 0
+        if status in (fb.CANDIDATE_DISMISSED, fb.CANDIDATE_ABANDONED):
+            print(f"error: candidate is {status}, cannot resolve", file=sys.stderr)
+            return 2
+        if now - c.get("created_at", 0) > ttl:
+            fb.set_candidate_status(state, args.candidate, fb.CANDIDATE_ABANDONED)
+            print("error: candidate has expired", file=sys.stderr)
+            return 2
+        evidence = fbd.human_evidence_id(c["hash"])
+        try:
+            r = fbstore.record(
+                name=args.name,
+                description=args.description,
+                evidence=evidence,
+                scope=args.scope or "",
+                why=args.why or "",
+                how_to_apply=args.how_to_apply or "",
+                excuse=args.excuse or "",
+            )
+        except ValueError as e:
+            if "already recorded" in str(e):
+                # Same human prompt hash already counted for this rule: the
+                # count must NOT inflate. Treat as an idempotent success.
+                r = fbstore.get(args.name)
+                if r is None:
+                    raise
+            else:
+                raise
+        fb.set_candidate_status(state, args.candidate, fb.CANDIDATE_RESOLVED, rule=args.name)
+    if args.json:
+        print(json.dumps(r.to_dict(), ensure_ascii=False, indent=2))
+    else:
+        print(f"resolved candidate {args.candidate} -> {r.name!r} "
+              f"(count={r.count}, default severity={fb.resolve_severity(r, {})})")
+    return 0
+
+
+def cmd_fb_dismiss(args) -> int:
+    """Dismiss a pending feedback candidate as NOT feedback, with a reason."""
+    if not (args.reason or "").strip():
+        print("error: dismiss requires a non-empty --reason", file=sys.stderr)
+        return 2
+    now = time.time()
+    st = fb.FeedbackState()
+    with st.locked() as state:
+        c = fb.get_candidate(state, args.candidate)
+        if c is None:
+            print(f"error: unknown or expired feedback candidate: {args.candidate}", file=sys.stderr)
+            return 2
+        if args.session and c.get("session_id") != args.session:
+            print("error: candidate belongs to a different session", file=sys.stderr)
+            return 2
+        status = c.get("status")
+        if status == fb.CANDIDATE_DISMISSED:
+            print(f"already dismissed: {args.candidate}")
+            return 0
+        if status == fb.CANDIDATE_RESOLVED:
+            print("error: candidate already resolved into a rule, cannot dismiss", file=sys.stderr)
+            return 2
+        fb.set_candidate_status(state, args.candidate, fb.CANDIDATE_DISMISSED, reason=args.reason)
+    print(f"dismissed candidate {args.candidate} (not feedback): {args.reason}")
+    return 0
+
+
+def cmd_fb_candidates(args) -> int:
+    """List feedback candidates from the session cache (audit/debug; no bodies)."""
+    now = time.time()
+    cfg = config.load_config()
+    ttl = fb.candidate_ttl_seconds(cfg)
+    st = fb.FeedbackState()
+    with st.locked() as state:
+        fb.prune_candidates(state, now, ttl)
+        cands = list(state.get("candidates", []))
+    if args.json:
+        print(json.dumps(cands, ensure_ascii=False, indent=2))
+        return 0
+    if not cands:
+        print("(no feedback candidates)")
+        return 0
+    for c in sorted(cands, key=lambda x: x.get("created_at", 0)):
+        print(f"{c.get('id')}  [{c.get('status')}]  session={c.get('session_id')} "
+              f"turn={c.get('turn_id')}  cues={','.join(c.get('cues', [])) or '-'}")
+    print(f"\n{len(cands)} candidate(s) (prompt bodies are never stored — hash + cues only)")
+    return 0
+
+
 def cmd_fb_violations(args) -> int:
     store = fb.FeedbackStore()
     rules = store.list()
@@ -266,7 +380,9 @@ def _add_feedback_parser(sub, common):
     fbp.set_defaults(func=lambda args, store: args.fbfunc(args))
     fsub = fbp.add_subparsers(dest="fbcmd", required=True)
 
-    r = fsub.add_parser("record", parents=[common], help="record a human feedback occurrence (count = distinct evidence)")
+    r = fsub.add_parser("record", parents=[common],
+                        help="[optional/advanced] manually record a human feedback occurrence "
+                             "(count = distinct evidence). The zero-click loop uses `resolve` instead.")
     r.add_argument("--name", required=True)
     r.add_argument("--description", required=True)
     r.add_argument("--evidence", required=True, help="identifier of THIS occurrence (duplicate ids are rejected)")
@@ -275,6 +391,30 @@ def _add_feedback_parser(sub, common):
     r.add_argument("--how-to-apply", dest="how_to_apply")
     r.add_argument("--excuse", help="a non-excuse to reject explicitly")
     r.set_defaults(fbfunc=cmd_fb_record)
+
+    r = fsub.add_parser("resolve", parents=[common],
+                        help="resolve a pending auto-detected feedback candidate into a rule "
+                             "(evidence id derived internally; one-shot/idempotent)")
+    r.add_argument("--candidate", required=True, help="internal candidate id (from the hook instruction)")
+    r.add_argument("--name", required=True, help="rule to record/merge into (existing or new)")
+    r.add_argument("--description", required=True, help="the canonical rule text")
+    r.add_argument("--scope")
+    r.add_argument("--why")
+    r.add_argument("--how-to-apply", dest="how_to_apply")
+    r.add_argument("--excuse", help="a non-excuse to reject explicitly")
+    r.add_argument("--session", help="optional: assert the candidate's session id")
+    r.set_defaults(fbfunc=cmd_fb_resolve)
+
+    r = fsub.add_parser("dismiss", parents=[common],
+                        help="dismiss a pending feedback candidate as NOT feedback, with a reason")
+    r.add_argument("--candidate", required=True)
+    r.add_argument("--reason", required=True, help="why this prompt is not corrective feedback")
+    r.add_argument("--session", help="optional: assert the candidate's session id")
+    r.set_defaults(fbfunc=cmd_fb_dismiss)
+
+    r = fsub.add_parser("candidates", parents=[common],
+                        help="list auto-detected feedback candidates (hash + cues only, no bodies)")
+    r.set_defaults(fbfunc=cmd_fb_candidates)
 
     r = fsub.add_parser("list", parents=[common], help="list feedback rules")
     r.add_argument("-v", "--verbose", action="store_true")

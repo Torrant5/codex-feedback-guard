@@ -30,7 +30,6 @@ start empty if damaged.
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import re
 import secrets
@@ -42,6 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 from . import config
+from .locking import file_lock
 
 # ---- severity ladder -------------------------------------------------------
 WARN = "warn"
@@ -58,6 +58,29 @@ EVENTS = ("pre_bash", "pre_edit", "stop_check")
 # Absolute, non-configurable ceiling on Stop-loop blocks. `feedback_hook`
 # clamps any configured `stop_max_blocks` to this no matter what config says.
 HARD_MAX_STOP_BLOCKS = 3
+
+# Pending-candidate expiry defaults / clamps. A candidate is a short-lived,
+# body-less marker that "this turn's prompt looked like corrective feedback";
+# it must expire so a never-resolved candidate cannot nag or block forever.
+DEFAULT_CANDIDATE_TTL = 3600
+_MIN_CANDIDATE_TTL = 60
+_MAX_CANDIDATE_TTL = 7 * 86_400
+
+
+def candidate_ttl_seconds(cfg: dict) -> int:
+    """Pending-candidate TTL, clamped to a sane [_MIN, _MAX] window."""
+    fcfg = cfg.get("feedback", {}) if isinstance(cfg, dict) else {}
+    try:
+        ttl = int(fcfg.get("candidate_ttl_seconds", DEFAULT_CANDIDATE_TTL))
+    except (TypeError, ValueError):
+        ttl = DEFAULT_CANDIDATE_TTL
+    return max(_MIN_CANDIDATE_TTL, min(ttl, _MAX_CANDIDATE_TTL))
+
+
+def auto_capture_enabled(cfg: dict) -> bool:
+    """Whether zero-click feedback capture is on (default: on)."""
+    fcfg = cfg.get("feedback", {}) if isinstance(cfg, dict) else {}
+    return bool(fcfg.get("auto_capture", True))
 
 # Allowed enforcement-spec keys. Anything else is rejected by validation so a
 # spec can never smuggle in an arbitrary command/checker to execute.
@@ -359,12 +382,8 @@ class FeedbackStore:
     @contextmanager
     def _locked(self):
         self.dir.mkdir(parents=True, exist_ok=True)
-        with open(self.lock_path, "w") as lockf:
-            fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
+        with file_lock(self.lock_path):
+            yield
 
     # ---- log I/O -----------------------------------------------------------
     def _append_event(self, event: dict) -> None:
@@ -807,14 +826,10 @@ class FeedbackState:
     @contextmanager
     def locked(self):
         self.dir.mkdir(parents=True, exist_ok=True)
-        with open(self.lock_path, "w") as lockf:
-            fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
-            try:
-                state = self._load()
-                yield state
-                self._save(state)
-            finally:
-                fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
+        with file_lock(self.lock_path):
+            state = self._load()
+            yield state
+            self._save(state)
 
     def _load(self) -> dict:
         if not self.path.exists():
@@ -836,6 +851,7 @@ class FeedbackState:
         data.setdefault("approvals", [])
         data.setdefault("admin_approvals", [])
         data.setdefault("stop_attempts", {})
+        data.setdefault("candidates", [])
         return data
 
     @staticmethod
@@ -845,6 +861,7 @@ class FeedbackState:
             "approvals": [],
             "admin_approvals": [],
             "stop_attempts": {},
+            "candidates": [],
             "_corrupt": corrupt,
         }
 
@@ -1123,3 +1140,96 @@ def bump_stop_attempt(state: dict, key: str) -> int:
     attempts = state.setdefault("stop_attempts", {})
     attempts[key] = attempts.get(key, 0) + 1
     return attempts[key]
+
+
+# ---------------------------------------------------------------------------
+# Pending feedback-candidate lifecycle (disposable session-state cache)
+#
+# A candidate records ONLY: an internal id, the prompt HASH (never the body),
+# session/turn, detection cue categories, a status, and a creation timestamp.
+# The raw prompt is already in the model's context and is never persisted here.
+# Statuses: pending -> resolved | dismissed | abandoned. `abandoned` is the
+# terminal state a Stop cap leaves behind for later human audit — it never
+# blocks again, so the loop is bounded across turns as well as within one.
+# ---------------------------------------------------------------------------
+CANDIDATE_PENDING = "pending"
+CANDIDATE_RESOLVED = "resolved"
+CANDIDATE_DISMISSED = "dismissed"
+CANDIDATE_ABANDONED = "abandoned"
+
+
+def prune_candidates(state: dict, now: float, ttl: int) -> None:
+    """Drop candidates older than the TTL regardless of status (cache hygiene)."""
+    state["candidates"] = [
+        c for c in state.get("candidates", []) if now - c.get("created_at", 0) <= ttl
+    ]
+
+
+def get_candidate(state: dict, candidate_id: str) -> dict | None:
+    for c in state.get("candidates", []):
+        if c.get("id") == candidate_id:
+            return c
+    return None
+
+
+def upsert_candidate(
+    state: dict,
+    candidate_id: str,
+    session_id: str,
+    turn_id: str,
+    p_hash: str,
+    cues: list,
+    now: float,
+    ttl: int,
+) -> str:
+    """Ensure a pending candidate exists; return its current status.
+
+    Idempotent: a second detection of the same (session, turn, prompt-hash) —
+    same id — never creates a duplicate and never resurrects an already
+    resolved/dismissed/abandoned candidate.
+    """
+    prune_candidates(state, now, ttl)
+    existing = get_candidate(state, candidate_id)
+    if existing is not None:
+        return existing.get("status", CANDIDATE_PENDING)
+    state.setdefault("candidates", []).append(
+        {
+            "id": candidate_id,
+            "hash": p_hash,
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "cues": list(cues),
+            "status": CANDIDATE_PENDING,
+            "created_at": now,
+        }
+    )
+    return "created"
+
+
+def pending_candidates(state: dict, session_id: str, now: float, ttl: int) -> list:
+    """Non-expired pending candidates for a session (drives Stop blocking)."""
+    prune_candidates(state, now, ttl)
+    return [
+        c
+        for c in state.get("candidates", [])
+        if c.get("session_id") == session_id and c.get("status") == CANDIDATE_PENDING
+    ]
+
+
+def set_candidate_status(state: dict, candidate_id: str, status: str, **extra) -> bool:
+    c = get_candidate(state, candidate_id)
+    if c is None:
+        return False
+    c["status"] = status
+    for k, v in extra.items():
+        c[k] = v
+    return True
+
+
+def abandon_pending(state: dict, session_id: str, now: float, ttl: int) -> list:
+    """Mark this session's pending candidates abandoned; return their ids."""
+    ids = []
+    for c in pending_candidates(state, session_id, now, ttl):
+        c["status"] = CANDIDATE_ABANDONED
+        ids.append(c["id"])
+    return ids

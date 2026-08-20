@@ -17,7 +17,6 @@ or false consumption; it only reduces how often the real number is refreshed.
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import subprocess
 import time
@@ -26,6 +25,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import config
+from .locking import file_lock
 
 
 @dataclass
@@ -101,12 +101,8 @@ def _locked_cache():
     spawn instead of a thundering herd.
     """
     lock_path = _cache_path().with_suffix(".lock")
-    with open(lock_path, "w") as lockf:
-        fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
+    with file_lock(lock_path):
+        yield
 
 
 def _load_cache_entry() -> dict | None:

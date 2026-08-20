@@ -18,7 +18,6 @@ runs and whether their groups are still alive.
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import signal
@@ -29,6 +28,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import config, guard
+from .locking import file_lock
 from .quota import read_codex_quota_cached as read_codex_quota
 
 
@@ -65,14 +65,10 @@ def _locked_runs():
     load/mutate/save has a lost-update race between the load and the save).
     """
     lock_path = _runs_path().with_suffix(".lock")
-    with open(lock_path, "w") as lockf:
-        fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
-        try:
-            data = _load_runs()
-            yield data
-            _save_runs(data)
-        finally:
-            fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
+    with file_lock(lock_path):
+        data = _load_runs()
+        yield data
+        _save_runs(data)
 
 
 def _register(pgid: int, pid: int, cmd: list, dry_run: bool) -> None:

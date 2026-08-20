@@ -28,13 +28,45 @@ def _xdg_home(env_var: str, fallback: Path) -> Path:
     return Path(override) if override else fallback
 
 
-def default_config_path() -> Path:
-    """Per-user config.json location: $XDG_CONFIG_HOME/codex-feedback-guard/config.json."""
+def _windows_base() -> Path:
+    """Per-user writable base on Windows: %LOCALAPPDATA% with a sensible fallback.
+
+    ``%LOCALAPPDATA%`` (e.g. ``C:\\Users\\me\\AppData\\Local``) is the correct
+    home for non-roaming per-user application state; when the variable is unset
+    (rare, but possible under a stripped service account) fall back to the
+    conventional ``~/AppData/Local`` path.
+    """
+    base = os.environ.get("LOCALAPPDATA")
+    return Path(base) if base else Path.home() / "AppData" / "Local"
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def default_config_path(is_windows: bool | None = None) -> Path:
+    """Per-user config.json location.
+
+    Windows: ``%LOCALAPPDATA%\\codex-feedback-guard\\config.json``.
+    POSIX:   ``$XDG_CONFIG_HOME/codex-feedback-guard/config.json``.
+
+    ``is_windows`` is injectable (defaults to the real platform) so the branch
+    can be tested on either OS without patching ``os.name`` — patching it would
+    also break ``pathlib`` on the test runner.
+    """
+    if _is_windows() if is_windows is None else is_windows:
+        return _windows_base() / APP_NAME / "config.json"
     return _xdg_home("XDG_CONFIG_HOME", Path.home() / ".config") / APP_NAME / "config.json"
 
 
-def default_data_dir() -> Path:
-    """Per-user runtime-data dir: $XDG_DATA_HOME/codex-feedback-guard."""
+def default_data_dir(is_windows: bool | None = None) -> Path:
+    """Per-user runtime-data dir.
+
+    Windows: ``%LOCALAPPDATA%\\codex-feedback-guard``.
+    POSIX:   ``$XDG_DATA_HOME/codex-feedback-guard``.
+    """
+    if _is_windows() if is_windows is None else is_windows:
+        return _windows_base() / APP_NAME
     return _xdg_home("XDG_DATA_HOME", Path.home() / ".local" / "share") / APP_NAME
 
 

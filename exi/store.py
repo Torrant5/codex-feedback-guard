@@ -20,9 +20,9 @@ to the caller — no silent promotion.
 """
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
+import re
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import config
+from .locking import file_lock
 
 MIN_INDEPENDENT_EVIDENCE = 2
 
@@ -49,6 +50,17 @@ STATUS_CONFIRMED = "confirmed"
 STATUS_SUPERSEDED = "superseded"
 STATUS_RETIRED = "retired"
 
+# Absolute ceilings on automatic memory retrieval, enforced no matter what a
+# per-user config says (config can only make these SMALLER — see the `retrieve`
+# clamps in feedback_hook). A hook must never inject an unbounded amount.
+ABS_MAX_MEMORY_RESULTS = 10
+ABS_MAX_MEMORY_CHARS = 2000
+
+# CJK ranges (Hiragana, Katakana, CJK Unified + Ext-A, compat ideographs).
+_CJK_RANGES = "぀-ヿ㐀-䶿一-鿿豈-﫿"
+_WORD_RE = re.compile(r"[a-z0-9]+")
+_CJK_RE = re.compile(f"[{_CJK_RANGES}]")
+
 
 def _now() -> float:
     return time.time()
@@ -56,6 +68,51 @@ def _now() -> float:
 
 def _iso(ts: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(ts))
+
+
+# ---------------------------------------------------------------------------
+# Language-agnostic lexical features (English words + CJK uni/bigrams)
+#
+# FTS5's default tokenizer splits on non-word boundaries and so does not
+# segment space-free Japanese; this deterministic feature set gives retrieval a
+# fallback that works for CJK *and* English with no embeddings, network, or
+# third-party dependency — pure standard library.
+# ---------------------------------------------------------------------------
+def feature_set(text: str) -> set:
+    """Latin/digit word tokens ∪ CJK single chars ∪ CJK adjacent bigrams."""
+    text = (text or "").lower()
+    feats = set(_WORD_RE.findall(text))
+    cjk = _CJK_RE.findall(text)
+    feats.update(cjk)
+    feats.update(cjk[i] + cjk[i + 1] for i in range(len(cjk) - 1))
+    return feats
+
+
+def relevance_score(query: str, cwd: str, obs: "Observation") -> int:
+    """Deterministic relevance of an observation to (query, cwd). Higher = better.
+
+    Combines: lexical feature overlap between the query and the observation's
+    claim/scope/triggers, a strong boost when a trigger keyword literally
+    appears in the query, and a scope↔cwd match. No randomness, no I/O.
+    """
+    q = feature_set(query)
+    if not q:
+        return 0
+    doc_text = " ".join([obs.claim, obs.scope, " ".join(obs.triggers)])
+    score = len(q & feature_set(doc_text))
+
+    ql = (query or "").lower()
+    for t in obs.triggers:
+        if t and t.lower() in ql:
+            score += 5
+    scope = (obs.scope or "").lower()
+    if scope and cwd:
+        cwd_l = cwd.lower()
+        if scope in cwd_l or cwd_l in scope:
+            score += 3
+    if scope and scope in ql:
+        score += 2
+    return score
 
 
 def _gen_id(scope: str, claim: str, ts: float) -> str:
@@ -117,12 +174,8 @@ class Store:
         so would deadlock a process against itself.
         """
         self.dir.mkdir(parents=True, exist_ok=True)
-        with open(self.lock_path, "w") as lockf:
-            fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
+        with file_lock(self.lock_path):
+            yield
 
     # ---- low level log I/O -------------------------------------------------
     def _append_event(self, event: dict) -> None:
@@ -408,6 +461,61 @@ class Store:
             return [state[r[0]] for r in rows if r[0] in state]
         finally:
             con.close()
+
+    def _is_current(self, obs: "Observation", now_iso: str) -> bool:
+        """Injectable iff confirmed, not superseded/retired, and not review-stale.
+
+        A confirmed observation whose ``review_after`` has passed is treated as
+        stale (needs human re-verification) and is NOT auto-injected, so an
+        out-of-date memory can't silently keep steering the agent.
+        """
+        if obs.status != STATUS_CONFIRMED:
+            return False
+        if obs.review_after and obs.review_after <= now_iso:
+            return False
+        return True
+
+    def retrieve(
+        self, query: str, cwd: str = "", limit: int = 5, now: float | None = None
+    ) -> list:
+        """Rank current, confirmed observations by relevance to (query, cwd).
+
+        Returns at most ``limit`` (hard-capped at ``ABS_MAX_MEMORY_RESULTS``)
+        observations, most-relevant first, ties broken deterministically by
+        recency then id. Excludes under-evidenced candidates, superseded,
+        retired, and review-expired stale items. FTS matches (when the query has
+        FTS-tokenizable terms) get a small boost; the lexical scorer is the
+        cross-language fallback that also covers space-free CJK. May raise on a
+        corrupt log — the caller (hook) is responsible for failing open.
+        """
+        query = query or ""
+        if not query.strip():
+            return []
+        limit = max(0, min(int(limit), ABS_MAX_MEMORY_RESULTS))
+        if limit == 0:
+            return []
+        now_iso = _iso(now if now is not None else _now())
+        state = self.derive()
+        current = [o for o in state.values() if self._is_current(o, now_iso)]
+        if not current:
+            return []
+
+        # Best-effort FTS boost: ids the FTS index matches for this query.
+        fts_ids: set = set()
+        try:
+            fts_ids = {o.id for o in self.search(query, limit=ABS_MAX_MEMORY_RESULTS)}
+        except Exception:  # noqa: BLE001 - FTS is an optional boost, never fatal
+            fts_ids = set()
+
+        scored = []
+        for o in current:
+            score = relevance_score(query, cwd, o)
+            if o.id in fts_ids:
+                score += 2
+            if score > 0:
+                scored.append((score, o))
+        scored.sort(key=lambda so: (-so[0], so[1].created_at, so[1].id))
+        return [o for _, o in scored[:limit]]
 
     # ---- queries -----------------------------------------------------------
     def list(self, status: str | None = None, scope: str | None = None) -> list:

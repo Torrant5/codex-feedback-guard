@@ -24,6 +24,13 @@
     "inject_min_count": 3,
     "inject_max_chars": 3000,
     "approval_ttl_seconds": 600,
-    "stop_max_blocks": 3
+    "stop_max_blocks": 3,
+    "auto_capture": true,
+    "candidate_ttl_seconds": 3600
+  },
+  "memory": {
+    "inject_max_results": 5,
+    "inject_max_chars": 1500,
+    "min_relevance": 2
   }
 }

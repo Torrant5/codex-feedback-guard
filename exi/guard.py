@@ -12,13 +12,13 @@ post-reset consumption is still counted. See `weekly_increment`.
 """
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 from contextlib import contextmanager
 from pathlib import Path
 
 from . import config
+from .locking import file_lock
 
 # finding levels
 WARN = "warn"
@@ -110,14 +110,10 @@ def locked_state():
     each other's updates.
     """
     lock_path = state_path().with_suffix(".lock")
-    with open(lock_path, "w") as lockf:
-        fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
-        try:
-            state = load_state()
-            yield state
-            save_state(state)
-        finally:
-            fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
+    with file_lock(lock_path):
+        state = load_state()
+        yield state
+        save_state(state)
 
 
 def _prune_samples(state: dict, now: float, retention_hours: float) -> None:

@@ -10,7 +10,12 @@ from contextlib import redirect_stdout, redirect_stderr
 import conftest_paths  # noqa: F401
 
 from exi import feedback as fb
-from exi import feedback_hook
+from exi import feedback_core, feedback_hook
+
+
+def codex_sid(raw="s1"):
+    """Session key as the Codex adapter stores it (provider-namespaced)."""
+    return feedback_core.namespace_session(feedback_core.PROVIDER_CODEX, raw)
 
 
 class FeedbackHookBase(unittest.TestCase):
@@ -275,7 +280,7 @@ class PostAndStopTest(FeedbackHookBase):
         )
         st = fb.FeedbackState(data_dir=self.tmp.name)
         with st.locked() as state:
-            files = fb.tracked_files(state, "s1")
+            files = fb.tracked_files(state, codex_sid("s1"))
         self.assertEqual(len(files), 1)
         self.assertTrue(files[0].endswith("x.py"))
 
@@ -289,9 +294,10 @@ class PostAndStopTest(FeedbackHookBase):
             self.assertEqual(fb.tracked_files(state, "s1"), [])
 
     def _track(self, path, session="s1"):
+        # Seed under the same provider-namespaced key the Codex Stop adapter reads.
         st = fb.FeedbackState(data_dir=self.tmp.name)
         with st.locked() as state:
-            fb.track_changed_files(state, session, self.tmp.name, [path])
+            fb.track_changed_files(state, codex_sid(session), self.tmp.name, [path])
 
     def test_stop_blocks_up_to_three_then_stops(self):
         # count 5 -> deny severity in stop -> blocking
@@ -495,6 +501,295 @@ class FailOpenTest(FeedbackHookBase):
         self.assertEqual(rc, 0)
         self.assertFalse(self.is_deny(out))
         self.assertIn("boom", err)
+
+
+# --------------------------------------------------------------------------- #
+# Zero-click feedback capture + automatic memory retrieval (Features A + B)
+# --------------------------------------------------------------------------- #
+from exi import exicli
+from exi.store import Store
+
+
+class ZeroClickCaptureTest(FeedbackHookBase):
+    CORRECTIVE = "二度と勝手にコミットしないで。前にも言ったよね。"
+
+    def _cid(self, ctx):
+        m = re.search(r"--candidate ([0-9a-f]{16})", ctx)
+        self.assertIsNotNone(m, f"no candidate id in context: {ctx!r}")
+        return m.group(1)
+
+    def _single_json_doc(self, out):
+        # Exactly one JSON document on stdout (no shadowing / multiple docs).
+        out = out.strip()
+        self.assertTrue(out)
+        json.loads(out)  # raises if more than one doc / invalid
+        return out
+
+    def test_corrective_prompt_creates_candidate_and_instruction(self):
+        _, out, _ = self.run_hook(
+            "UserPromptSubmit",
+            {"prompt": self.CORRECTIVE, "session_id": "s1", "turn_id": "t1"},
+        )
+        self._single_json_doc(out)
+        ctx = self.additional_context(out)
+        self.assertIn("feedback candidate", ctx)
+        self.assertIn("exi feedback resolve", ctx)
+        self.assertIn("exi feedback dismiss", ctx)
+        cid = self._cid(ctx)
+        # Candidate persisted with NO prompt body.
+        st = fb.FeedbackState(data_dir=self.tmp.name)
+        with st.locked() as state:
+            c = fb.get_candidate(state, cid)
+        self.assertIsNotNone(c)
+        self.assertEqual(c["status"], "pending")
+        self.assertNotIn("prompt", c)
+
+    def test_normal_prompt_no_candidate(self):
+        _, out, _ = self.run_hook(
+            "UserPromptSubmit",
+            {"prompt": "How do I configure the deploy pipeline?", "session_id": "s1", "turn_id": "t1"},
+        )
+        self.assertNotIn("feedback candidate", self.additional_context(out))
+        st = fb.FeedbackState(data_dir=self.tmp.name)
+        with st.locked() as state:
+            self.assertEqual(state.get("candidates", []), [])
+
+    def test_approval_marker_never_becomes_candidate(self):
+        # An exact-but-unmatched approval marker must not create a candidate.
+        self.run_hook("UserPromptSubmit",
+                      {"prompt": "ALLOW_FEEDBACK:deadbeefdeadbeef", "session_id": "s1", "turn_id": "t1"})
+        st = fb.FeedbackState(data_dir=self.tmp.name)
+        with st.locked() as state:
+            self.assertEqual(state.get("candidates", []), [])
+
+    def test_auto_capture_off_disables(self):
+        cfg_path = os.path.join(self.tmp.name, "cfg.json")
+        with open(cfg_path, "w") as f:
+            json.dump({"feedback": {"auto_capture": False}}, f)
+        os.environ["EXI_CONFIG"] = cfg_path
+        _, out, _ = self.run_hook(
+            "UserPromptSubmit", {"prompt": self.CORRECTIVE, "session_id": "s1", "turn_id": "t1"})
+        self.assertNotIn("feedback candidate", self.additional_context(out))
+
+    def test_combined_single_doc_memory_rules_and_candidate(self):
+        # A confirmed observation (memory) + a high-count rule + a corrective
+        # prompt must all merge into ONE additionalContext document.
+        obs = Store(data_dir=self.tmp.name)
+        o = obs.capture("infra/deploy", "Deploys go through the deploy-pipeline wrapper",
+                        evidence_paths=["AGENTS.md"], triggers=["deploy"])
+        obs.confirm(o.id, evidence_paths=["runbook.md"])
+        self.make_rule("no-fallback", 4, {"event": "pre_bash", "when": "x"},
+                       desc="no hidden fallbacks")
+        _, out, _ = self.run_hook(
+            "UserPromptSubmit",
+            {"prompt": "二度とやめて。deploy pipeline の話。前にも言った。",
+             "session_id": "s1", "turn_id": "t1", "cwd": "/x"},
+        )
+        self._single_json_doc(out)
+        ctx = self.additional_context(out)
+        self.assertIn("deploy-pipeline wrapper", ctx)   # memory
+        self.assertIn("no hidden fallbacks", ctx)       # recurring rule
+        self.assertIn("feedback candidate", ctx)        # candidate instruction
+
+    def test_memory_injected_on_normal_prompt(self):
+        obs = Store(data_dir=self.tmp.name)
+        o = obs.capture("infra/deploy", "Deploys go through the deploy-pipeline wrapper",
+                        evidence_paths=["AGENTS.md"], triggers=["deploy"])
+        obs.confirm(o.id, evidence_paths=["runbook.md"])
+        _, out, _ = self.run_hook(
+            "UserPromptSubmit",
+            {"prompt": "how do I deploy to prod?", "session_id": "s1", "turn_id": "t1", "cwd": "/x"},
+        )
+        self.assertIn("deploy-pipeline wrapper", self.additional_context(out))
+
+    def test_memory_bounded_by_config_chars(self):
+        cfg_path = os.path.join(self.tmp.name, "cfg.json")
+        with open(cfg_path, "w") as f:
+            json.dump({"memory": {"inject_max_chars": 200, "inject_max_results": 10}}, f)
+        os.environ["EXI_CONFIG"] = cfg_path
+        obs = Store(data_dir=self.tmp.name)
+        for i in range(10):
+            o = obs.capture(f"s{i}", f"deploy pipeline claim number {i} " + "y" * 40,
+                            evidence_paths=["a"], triggers=["deploy"])
+            obs.confirm(o.id, evidence_paths=["b"])
+        _, out, _ = self.run_hook(
+            "UserPromptSubmit",
+            {"prompt": "deploy pipeline", "session_id": "s1", "turn_id": "t1", "cwd": "/x"},
+        )
+        ctx = self.additional_context(out)
+        # The memory section header + its bounded body must stay within budget.
+        mem_part = ctx.split("Recurring user feedback")[0]
+        self.assertLessEqual(len(mem_part), 260)  # 200 budget + small header slack
+
+    def test_corrupt_observation_store_fails_open(self):
+        obs = Store(data_dir=self.tmp.name)
+        o = obs.capture("s", "deploy pipeline", evidence_paths=["a"])
+        obs.confirm(o.id, evidence_paths=["b"])
+        with open(obs.log_path, "a") as f:
+            f.write("{broken\n")
+        rc, out, err = self.run_hook(
+            "UserPromptSubmit",
+            {"prompt": "deploy pipeline", "session_id": "s1", "turn_id": "t1"},
+        )
+        self.assertEqual(rc, 0)  # never blocks the turn
+        self.assertIn("memory", err.lower())
+
+
+class ResolveDismissCliTest(FeedbackHookBase):
+    def _make_candidate(self, prompt, session="s1", turn="t1"):
+        _, out, _ = self.run_hook(
+            "UserPromptSubmit", {"prompt": prompt, "session_id": session, "turn_id": turn})
+        ctx = self.additional_context(out)
+        m = re.search(r"--candidate ([0-9a-f]{16})", ctx)
+        self.assertIsNotNone(m)
+        return m.group(1)
+
+    def _cli(self, argv):
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(io.StringIO()):
+            rc = exicli.main(argv)
+        return rc, out.getvalue()
+
+    def test_resolve_records_rule_and_marks_resolved(self):
+        cid = self._make_candidate("二度と勝手にやらないで。前にも言った。")
+        rc, _ = self._cli(["feedback", "resolve", "--candidate", cid,
+                           "--name", "no-auto", "--description", "do not act without asking",
+                           "--why", "user hates it", "--how-to-apply", "ask first"])
+        self.assertEqual(rc, 0)
+        r = self.store.get("no-auto")
+        self.assertIsNotNone(r)
+        self.assertEqual(r.count, 1)
+        st = fb.FeedbackState(data_dir=self.tmp.name)
+        with st.locked() as state:
+            self.assertEqual(fb.get_candidate(state, cid)["status"], "resolved")
+
+    def test_resolve_is_idempotent_one_shot(self):
+        cid = self._make_candidate("二度とやめて。前にも言った。")
+        self._cli(["feedback", "resolve", "--candidate", cid, "--name", "r", "--description", "d"])
+        rc, out = self._cli(["feedback", "resolve", "--candidate", cid, "--name", "r",
+                             "--description", "d"])
+        self.assertEqual(rc, 0)
+        self.assertIn("already resolved", out)
+        self.assertEqual(self.store.get("r").count, 1)  # not inflated
+
+    def test_duplicate_human_prompt_hash_does_not_inflate_count(self):
+        # SAME prompt text in two different turns -> same hash -> count stays 1.
+        prompt = "二度と勝手にやらないで。前にも言った。"
+        c1 = self._make_candidate(prompt, turn="t1")
+        c2 = self._make_candidate(prompt, turn="t2")
+        self.assertNotEqual(c1, c2)  # distinct candidates (distinct turns)
+        self._cli(["feedback", "resolve", "--candidate", c1, "--name", "r", "--description", "d"])
+        self._cli(["feedback", "resolve", "--candidate", c2, "--name", "r", "--description", "d"])
+        self.assertEqual(self.store.get("r").count, 1)  # deduped by prompt hash
+
+    def test_distinct_prompts_increment_count(self):
+        c1 = self._make_candidate("二度と勝手にやらないで。前にも言った。", turn="t1")
+        c2 = self._make_candidate("そんな面倒なことできない、やめて。", turn="t2")
+        self._cli(["feedback", "resolve", "--candidate", c1, "--name", "r", "--description", "d"])
+        self._cli(["feedback", "resolve", "--candidate", c2, "--name", "r", "--description", "d"])
+        self.assertEqual(self.store.get("r").count, 2)
+
+    def test_dismiss_marks_not_feedback(self):
+        cid = self._make_candidate("二度とやめて。前にも言った。")
+        rc, _ = self._cli(["feedback", "dismiss", "--candidate", cid, "--reason", "just quoting"])
+        self.assertEqual(rc, 0)
+        st = fb.FeedbackState(data_dir=self.tmp.name)
+        with st.locked() as state:
+            self.assertEqual(fb.get_candidate(state, cid)["status"], "dismissed")
+        # No rule created by a dismiss.
+        self.assertEqual(self.store.list(), [])
+
+    def test_resolve_unknown_candidate_errors(self):
+        rc, _ = self._cli(["feedback", "resolve", "--candidate", "0" * 16,
+                           "--name", "r", "--description", "d"])
+        self.assertEqual(rc, 2)
+
+    def test_dismiss_requires_reason(self):
+        cid = self._make_candidate("二度とやめて。前にも言った。")
+        rc, _ = self._cli(["feedback", "dismiss", "--candidate", cid, "--reason", "   "])
+        self.assertEqual(rc, 2)
+
+    def test_resolve_cannot_disable_or_alter(self):
+        # The resolve subcommand only accepts record-shaped args; there is no
+        # path through it to disable/enable/configure a rule.
+        parser = exicli.build_parser()
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["feedback", "resolve", "--candidate", "x", "--disable"])
+
+
+class StopCandidateBlockTest(FeedbackHookBase):
+    def _make_candidate(self, session="s1", turn="t1"):
+        _, out, _ = self.run_hook(
+            "UserPromptSubmit",
+            {"prompt": "二度と勝手にやらないで。前にも言った。", "session_id": session, "turn_id": turn})
+        m = re.search(r"--candidate ([0-9a-f]{16})", self.additional_context(out))
+        return m.group(1)
+
+    def test_stop_blocks_on_unresolved_candidate_then_abandons(self):
+        self._make_candidate()
+        payload = {"session_id": "s1", "turn_id": "t1"}
+        blocks = 0
+        for _ in range(3):
+            _, out, _ = self.run_hook("Stop", payload)
+            if json.loads(out.strip()).get("decision") == "block":
+                blocks += 1
+        self.assertEqual(blocks, 3)
+        # 4th: loop guard — no more blocking, valid JSON, candidate abandoned.
+        _, out, _ = self.run_hook("Stop", payload)
+        obj = json.loads(out.strip())
+        self.assertNotEqual(obj.get("decision"), "block")
+        st = fb.FeedbackState(data_dir=self.tmp.name)
+        with st.locked() as state:
+            cands = state["candidates"]
+        self.assertTrue(cands and all(c["status"] == "abandoned" for c in cands))
+
+    def test_resolved_candidate_does_not_block_stop(self):
+        cid = self._make_candidate()
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(io.StringIO()):
+            exicli.main(["feedback", "resolve", "--candidate", cid, "--name", "r",
+                         "--description", "d"])
+        _, sout, _ = self.run_hook("Stop", {"session_id": "s1", "turn_id": "t1"})
+        self.assertEqual(json.loads(sout.strip()), {})
+
+    def test_stop_bound_shared_with_stop_check_rules(self):
+        # A stop_check deny rule AND a pending candidate must still share the
+        # single session+turn cap of 3 (never 6).
+        self.make_rule("no-debug", 5, {"event": "stop_check", "forbid_regex": "print\\("},
+                       desc="remove debug prints")
+        target = os.path.join(self.tmp.name, "x.py")
+        with open(target, "w") as f:
+            f.write("print('debug')\n")
+        st = fb.FeedbackState(data_dir=self.tmp.name)
+        with st.locked() as state:
+            fb.track_changed_files(state, codex_sid("s1"), self.tmp.name, [target])
+        self._make_candidate()
+        payload = {"session_id": "s1", "turn_id": "t1"}
+        blocks = 0
+        for _ in range(6):
+            _, out, _ = self.run_hook("Stop", payload)
+            if json.loads(out.strip()).get("decision") == "block":
+                blocks += 1
+        self.assertEqual(blocks, 3)
+
+
+class NoRawPromptPersistenceTest(FeedbackHookBase):
+    SECRET = "二度と勝手にSUPERSECRETTOKEN123コミットしないで。前にも言った。"
+
+    def test_no_raw_prompt_in_any_durable_or_state_file(self):
+        _, out, _ = self.run_hook(
+            "UserPromptSubmit", {"prompt": self.SECRET, "session_id": "s1", "turn_id": "t1"})
+        cid = re.search(r"--candidate ([0-9a-f]{16})", self.additional_context(out)).group(1)
+        out2 = io.StringIO()
+        with redirect_stdout(out2), redirect_stderr(io.StringIO()):
+            exicli.main(["feedback", "resolve", "--candidate", cid, "--name", "r",
+                         "--description", "do not act unasked"])
+        # Scan every file under the data dir for the secret substring.
+        import pathlib
+        for p in pathlib.Path(self.tmp.name).rglob("*"):
+            if p.is_file():
+                data = p.read_text(encoding="utf-8", errors="ignore")
+                self.assertNotIn("SUPERSECRETTOKEN123", data, f"raw prompt leaked into {p}")
 
 
 if __name__ == "__main__":

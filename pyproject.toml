@@ -29,6 +29,7 @@ Issues = "https://github.com/Torrant5/codex-feedback-guard/issues"
 [project.scripts]
 exi = "exi.exicli:main"
 codex-guard = "exi.guardcli:main"
+exi-hook = "exi.hookcli:main"
 
 [tool.setuptools]
 packages = ["exi"]

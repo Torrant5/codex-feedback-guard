@@ -21,6 +21,7 @@ def _alive(pgid):
         return False
 
 
+@unittest.skipIf(os.name == "nt", "managed-run uses POSIX process groups")
 class TerminateGroupTest(unittest.TestCase):
     def _spawn_group(self):
         p = subprocess.Popen(["sleep", "30"], start_new_session=True)
@@ -67,6 +68,7 @@ class TerminateGroupTest(unittest.TestCase):
         self.assertEqual(action, "already-gone")
 
 
+@unittest.skipIf(os.name == "nt", "managed-run uses POSIX process groups")
 class RunSupervisesOwnedGroupTest(unittest.TestCase):
     """Regression: a parent shell exits immediately but leaves a background
     child alive in the same (owned) process group. `run` must keep supervising
@@ -167,6 +169,7 @@ class RegistryLockConcurrencyTest(unittest.TestCase):
         self.assertEqual(len(data["runs"]), n_procs * n_each)
 
 
+@unittest.skipIf(os.name == "nt", "managed-run uses POSIX process groups")
 class StateCorruptEnforcementTest(unittest.TestCase):
     """Regression: a corrupt guard-state.json must fail closed on the owned
     process group only — never leave it running silently, never touch any

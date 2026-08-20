@@ -80,6 +80,75 @@ class FeedbackStoreTest(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
+# Pending feedback-candidate lifecycle (disposable session-state helpers)
+# --------------------------------------------------------------------------- #
+class CandidateLifecycleTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.st = fb.FeedbackState(data_dir=self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_upsert_is_idempotent(self):
+        with self.st.locked() as state:
+            r1 = fb.upsert_candidate(state, "c1", "s1", "t1", "h1", ["prohibition"], 100.0, 3600)
+            r2 = fb.upsert_candidate(state, "c1", "s1", "t1", "h1", ["prohibition"], 101.0, 3600)
+            self.assertEqual(r1, "created")
+            self.assertEqual(r2, "pending")
+            self.assertEqual(len(state["candidates"]), 1)
+
+    def test_no_prompt_body_stored(self):
+        with self.st.locked() as state:
+            fb.upsert_candidate(state, "c1", "s1", "t1", "h1", ["prohibition"], 100.0, 3600)
+            c = fb.get_candidate(state, "c1")
+        self.assertEqual(set(c.keys()),
+                         {"id", "hash", "session_id", "turn_id", "cues", "status", "created_at"})
+        self.assertNotIn("prompt", c)
+
+    def test_pending_scoped_to_session(self):
+        with self.st.locked() as state:
+            fb.upsert_candidate(state, "c1", "s1", "t1", "h1", [], 100.0, 3600)
+            fb.upsert_candidate(state, "c2", "s2", "t1", "h2", [], 100.0, 3600)
+            self.assertEqual(len(fb.pending_candidates(state, "s1", 100.0, 3600)), 1)
+            self.assertEqual(len(fb.pending_candidates(state, "s2", 100.0, 3600)), 1)
+
+    def test_expiry_prunes(self):
+        with self.st.locked() as state:
+            fb.upsert_candidate(state, "c1", "s1", "t1", "h1", [], 100.0, 3600)
+            # 2 hours later with a 1h ttl -> pruned, no longer pending
+            self.assertEqual(fb.pending_candidates(state, "s1", 100.0 + 7200, 3600), [])
+
+    def test_resolve_and_dismiss_status(self):
+        with self.st.locked() as state:
+            fb.upsert_candidate(state, "c1", "s1", "t1", "h1", [], 100.0, 3600)
+            fb.set_candidate_status(state, "c1", fb.CANDIDATE_RESOLVED, rule="r")
+            self.assertEqual(fb.get_candidate(state, "c1")["status"], "resolved")
+            self.assertEqual(fb.pending_candidates(state, "s1", 100.0, 3600), [])
+
+    def test_abandon_pending_marks_terminal(self):
+        with self.st.locked() as state:
+            fb.upsert_candidate(state, "c1", "s1", "t1", "h1", [], 100.0, 3600)
+            ids = fb.abandon_pending(state, "s1", 100.0, 3600)
+            self.assertEqual(ids, ["c1"])
+            self.assertEqual(fb.get_candidate(state, "c1")["status"], "abandoned")
+            # abandoned never blocks again
+            self.assertEqual(fb.pending_candidates(state, "s1", 100.0, 3600), [])
+
+
+class CandidateConfigClampTest(unittest.TestCase):
+    def test_ttl_clamped(self):
+        self.assertEqual(fb.candidate_ttl_seconds({"feedback": {"candidate_ttl_seconds": 1}}), 60)
+        self.assertEqual(fb.candidate_ttl_seconds({"feedback": {"candidate_ttl_seconds": 10**9}}),
+                         7 * 86400)
+        self.assertEqual(fb.candidate_ttl_seconds({"feedback": {"candidate_ttl_seconds": "x"}}), 3600)
+
+    def test_auto_capture_default_on(self):
+        self.assertTrue(fb.auto_capture_enabled({}))
+        self.assertFalse(fb.auto_capture_enabled({"feedback": {"auto_capture": False}}))
+
+
+# --------------------------------------------------------------------------- #
 # Spec validation (declarative-only allow-list)
 # --------------------------------------------------------------------------- #
 class SpecValidationTest(unittest.TestCase):
