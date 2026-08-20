@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codex-feedback-guard"
+version = "0.1.0"
+description = "Unofficial community tools: a budget guard for Codex CLI hooks, plus an evidence-backed feedback/knowledge store."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Torrant5" }]
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Build Tools",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/Torrant5/codex-feedback-guard"
+Issues = "https://github.com/Torrant5/codex-feedback-guard/issues"
+
+[project.scripts]
+exi = "exi.exicli:main"
+codex-guard = "exi.guardcli:main"
+
+[tool.setuptools]
+packages = ["exi"]
+
+[tool.setuptools.package-data]
+exi = ["config.default.json"]

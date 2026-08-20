@@ -1,0 +1,26 @@
+# Runtime data — observations log, FTS index, guard/managed-run state,
+# promotions, quota cache. Always local, never committed.
+data/
+config.json
+
+# Codex hook installs / backups (only relevant if this repo is your ~/.codex checkout).
+.codex/
+hooks.json
+hooks.json.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.log
+
+# OS
+.DS_Store
