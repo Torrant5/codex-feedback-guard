@@ -152,12 +152,92 @@ MAX_PATH_CHARS = 4096
 # independent of MAX_REGEX_PATTERN_CHARS, which bounds the raw glob string.
 _MAX_TRANSLATED_REGEX_CHARS = 4000
 
-# Wall-clock deadline for a single regex evaluation. macOS/POSIX only
-# (SIGALRM); on other platforms or off the main thread this degrades to
-# "no hard timeout enforced" — the length limits above still apply.
+# Wall-clock deadline for a single regex evaluation. POSIX main-thread calls
+# also use SIGALRM. Every platform first applies the conservative structural
+# rejection below, so Windows never evaluates the common catastrophic nested-
+# quantifier/ambiguous-alternation shapes without a deadline.
 REGEX_SEARCH_TIMEOUT_SECONDS = 0.5
 
 _HAS_SIGALRM = hasattr(signal, "SIGALRM") and hasattr(signal, "setitimer")
+
+
+def _reject_unsafe_regex_shape(pattern: str) -> None:
+    """Reject backtracking-prone structures before calling :mod:`re`.
+
+    Python's standard regex engine has no per-match timeout on Windows.  A
+    worker thread cannot safely provide one because a pathological match can
+    retain the GIL.  This small, deliberately conservative scanner rejects the
+    most dangerous user-controlled shapes on *all* platforms: a repeated group
+    that itself contains repetition or alternation, and numeric backreferences.
+    Simple rule patterns (literals, character classes, ``\\s*``, anchors, and
+    ordinary non-nested repetition) continue to work.
+    """
+    stack: list[dict[str, bool]] = []
+    last_atom: dict[str, bool] | None = None
+    in_class = False
+    escaped = False
+    i = 0
+    while i < len(pattern):
+        c = pattern[i]
+        if escaped:
+            if c.isdigit():
+                raise RegexTimeout("regex backreferences are not allowed")
+            escaped = False
+            last_atom = {"repeated": False, "alternation": False}
+            i += 1
+            continue
+        if c == "\\":
+            escaped = True
+            i += 1
+            continue
+        if in_class:
+            if c == "]":
+                in_class = False
+                last_atom = {"repeated": False, "alternation": False}
+            i += 1
+            continue
+        if c == "[":
+            in_class = True
+            i += 1
+            continue
+        if c == "(":
+            stack.append({"repeated": False, "alternation": False})
+            last_atom = None
+            i += 1
+            continue
+        if c == ")":
+            if stack:
+                last_atom = stack.pop()
+            i += 1
+            continue
+        if c == "|":
+            if stack:
+                stack[-1]["alternation"] = True
+            last_atom = None
+            i += 1
+            continue
+
+        is_quantifier = c in "*+" or (c == "?" and last_atom is not None)
+        if c == "{" and last_atom is not None:
+            end = pattern.find("}", i + 1)
+            if end != -1 and re.fullmatch(r"[0-9]+(?:,[0-9]*)?", pattern[i + 1:end]):
+                is_quantifier = True
+                i = end
+        if is_quantifier:
+            if last_atom and (last_atom["repeated"] or last_atom["alternation"]):
+                raise RegexTimeout("regex nested repetition/alternation is not allowed")
+            if stack:
+                stack[-1]["repeated"] = True
+            last_atom = {"repeated": True, "alternation": False}
+            i += 1
+            continue
+
+        # Group-extension punctuation such as ``?:``/``?=`` is not an atom.
+        if c == "?" and last_atom is None:
+            i += 1
+            continue
+        last_atom = {"repeated": False, "alternation": False}
+        i += 1
 
 
 @contextmanager
@@ -192,13 +272,16 @@ def _regex_deadline(seconds: float):
             signal.setitimer(signal.ITIMER_REAL, max(remaining, 0.0001), old_interval)
 
 
-def _safe_regex_op(op, pattern, text, timeout, max_pattern_len, max_input_len):
+def _safe_regex_op(op, pattern, text, timeout, max_pattern_len, max_input_len,
+                   *, preflight=True):
     if pattern is None or text is None:
         return None
     if len(pattern) > max_pattern_len:
         raise RegexLimitError(f"regex pattern exceeds max length ({max_pattern_len} chars)")
     if len(text) > max_input_len:
         raise RegexLimitError(f"regex input text exceeds max length ({max_input_len} chars)")
+    if preflight:
+        _reject_unsafe_regex_shape(pattern)
     with _regex_deadline(timeout):
         return op(pattern, text)
 
@@ -224,7 +307,12 @@ def safe_match(
     max_pattern_len: int = _MAX_TRANSLATED_REGEX_CHARS,
     max_input_len: int = MAX_PATH_CHARS,
 ):
-    return _safe_regex_op(re.match, pattern, text, timeout, max_pattern_len, max_input_len)
+    # safe_match is private-in-practice and receives only regexes translated by
+    # _glob_to_regex from the restricted glob grammar. That translation can
+    # contain a safe quantified non-capturing group, so do not run the
+    # user-regex structural preflight against it.
+    return _safe_regex_op(re.match, pattern, text, timeout, max_pattern_len,
+                          max_input_len, preflight=False)
 
 
 # ---------------------------------------------------------------------------
@@ -595,7 +683,10 @@ def glob_match(path: str, pattern: str) -> bool:
         raise RegexLimitError(
             f"path_glob/exclude_glob exceeds max length ({MAX_GLOB_PATTERN_CHARS} chars)"
         )
-    path = str(path)
+    # Glob syntax is provider-neutral and always uses '/'. Normalize native
+    # Windows paths before matching so **/test_*.py exclusions behave exactly
+    # as they do on POSIX.
+    path = str(path).replace("\\", "/")
     if len(path) > MAX_PATH_CHARS:
         raise RegexLimitError(f"path exceeds max length ({MAX_PATH_CHARS} chars)")
     return safe_match(_glob_to_regex(pattern), path) is not None

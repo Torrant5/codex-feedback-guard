@@ -2,6 +2,7 @@ import multiprocessing as mp
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import conftest_paths  # noqa: F401
 
@@ -321,6 +322,12 @@ class EnginePreEditTest(unittest.TestCase):
         target = self.root / "test_mod.py"
         self.assertIsNone(fb.eval_pre_edit(self._rule(), spec, str(target), "code"))
 
+    def test_windows_test_file_path_is_excluded(self):
+        spec = {"event": "pre_edit", "path_glob": "**/*.py",
+                "exclude_glob": "**/test_*.py", "absent_sibling": "{dir}/test_{stem}.py"}
+        self.assertIsNone(fb.eval_pre_edit(
+            self._rule(), spec, r"C:\work\repo\tests\test_mod.py", "code"))
+
     def test_forbid_regex_content(self):
         spec = {"event": "pre_edit", "path_glob": "**/*.py", "forbid_regex": "except:\\s*pass"}
         self.assertIsNotNone(fb.eval_pre_edit(self._rule(), spec, "/a/x.py", "try:\n  f()\nexcept: pass"))
@@ -501,6 +508,12 @@ class RegexSafetyTest(unittest.TestCase):
         with self.assertRaises(fb.RegexTimeout):
             fb.safe_search(r"(a+)+$", "a" * 40 + "!")
         self.assertLess(_t.monotonic() - start, 3.0)
+
+    def test_pathological_pattern_rejected_without_sigalrm(self):
+        # Exercise the Windows/off-main-thread safety path on every CI host.
+        with mock.patch.object(fb, "_HAS_SIGALRM", False):
+            with self.assertRaises(fb.RegexTimeout):
+                fb.safe_search(r"(a+)+$", "a" * 40 + "!")
 
     def test_oversize_input_raises_limit(self):
         with self.assertRaises(fb.RegexLimitError):
