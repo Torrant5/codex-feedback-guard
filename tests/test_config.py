@@ -49,19 +49,19 @@ class ConfigPathResolutionTest(unittest.TestCase):
 
     def test_default_config_path_falls_back_to_home_dot_config(self):
         with tempfile.TemporaryDirectory() as d:
-            os.environ["HOME"] = d
-            self.assertEqual(
-                config.default_config_path(is_windows=False),
-                Path(d) / ".config" / "codex-feedback-guard" / "config.json",
-            )
+            with patch.object(config.Path, "home", return_value=Path(d)):
+                self.assertEqual(
+                    config.default_config_path(is_windows=False),
+                    Path(d) / ".config" / "codex-feedback-guard" / "config.json",
+                )
 
     def test_default_data_dir_falls_back_to_home_local_share(self):
         with tempfile.TemporaryDirectory() as d:
-            os.environ["HOME"] = d
-            self.assertEqual(
-                config.default_data_dir(is_windows=False),
-                Path(d) / ".local" / "share" / "codex-feedback-guard",
-            )
+            with patch.object(config.Path, "home", return_value=Path(d)):
+                self.assertEqual(
+                    config.default_data_dir(is_windows=False),
+                    Path(d) / ".local" / "share" / "codex-feedback-guard",
+                )
 
     def test_exi_env_vars_stay_authoritative_over_xdg(self):
         with tempfile.TemporaryDirectory() as d:
