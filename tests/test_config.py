@@ -35,7 +35,7 @@ class ConfigPathResolutionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             os.environ["XDG_CONFIG_HOME"] = d
             self.assertEqual(
-                config.default_config_path(),
+                config.default_config_path(is_windows=False),
                 Path(d) / "codex-feedback-guard" / "config.json",
             )
 
@@ -43,7 +43,7 @@ class ConfigPathResolutionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             os.environ["XDG_DATA_HOME"] = d
             self.assertEqual(
-                config.default_data_dir(),
+                config.default_data_dir(is_windows=False),
                 Path(d) / "codex-feedback-guard",
             )
 
@@ -51,7 +51,7 @@ class ConfigPathResolutionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             os.environ["HOME"] = d
             self.assertEqual(
-                config.default_config_path(),
+                config.default_config_path(is_windows=False),
                 Path(d) / ".config" / "codex-feedback-guard" / "config.json",
             )
 
@@ -59,7 +59,7 @@ class ConfigPathResolutionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             os.environ["HOME"] = d
             self.assertEqual(
-                config.default_data_dir(),
+                config.default_data_dir(is_windows=False),
                 Path(d) / ".local" / "share" / "codex-feedback-guard",
             )
 
@@ -97,14 +97,16 @@ class ConfigPathResolutionTest(unittest.TestCase):
             (user_dir / "config.json").write_text(
                 '{"guard": {"turn_soft_minutes": 5}}', encoding="utf-8"
             )
-            cfg = config.load_config()
+            with patch.object(config, "_is_windows", return_value=False):
+                cfg = config.load_config()
         self.assertEqual(cfg["guard"]["turn_soft_minutes"], 5)
         self.assertIn("tool_hard_count", cfg["guard"])  # untouched defaults still present
 
     def test_data_dir_creates_xdg_directory(self):
         with tempfile.TemporaryDirectory() as d:
             os.environ["XDG_DATA_HOME"] = d
-            path = config.data_dir()
+            with patch.object(config, "_is_windows", return_value=False):
+                path = config.data_dir()
             self.assertEqual(path, Path(d) / "codex-feedback-guard")
             self.assertTrue(path.is_dir())
 

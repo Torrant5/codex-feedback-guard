@@ -92,8 +92,11 @@ class HookMergeTest(unittest.TestCase):
             backup_path = path.with_suffix(".json.bak")
             self.assertEqual(backup_path.read_text(), original)
             self.assertEqual(json.loads(backup_path.read_text()), EXISTING_STOP)
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-            self.assertEqual(backup_path.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                # Unix permission bits are not a portable Windows contract;
+                # content preservation above is exercised on every platform.
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(backup_path.stat().st_mode & 0o777, 0o600)
 
     def test_dry_run_no_write(self):
         with tempfile.TemporaryDirectory() as d:

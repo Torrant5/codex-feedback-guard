@@ -436,7 +436,7 @@ class TrackingTest(unittest.TestCase):
             )
             files = fb.tracked_files(state, "s1")
             self.assertEqual(len(files), 1)
-            self.assertTrue(files[0].endswith("/a/b/x.py"))
+            self.assertEqual(Path(files[0]).parts[-3:], ("a", "b", "x.py"))
 
     def test_track_rejects_paths_outside_cwd(self):
         # Absolute paths outside cwd and relative escapes are never tracked.
