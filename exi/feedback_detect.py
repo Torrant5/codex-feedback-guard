@@ -150,12 +150,27 @@ def strip_code(text: str) -> str:
 # ambiguous ("again"/"また") and require two *distinct* categories to flag, so a
 # lone ambiguous word never trips the detector.
 # ---------------------------------------------------------------------------
+# Standalone/direct-utterance boundary: matches only when the phrase begins
+# right after a sentence terminator (or the very start of the prompt) and,
+# for the criticism cues below, ends right before one (or at the very end).
+# This keeps "いかれてる？" / "おかしいんじゃないのか？" as strong cues while
+# NOT flagging ordinary statements *about* a subject like "このAPIはいかれてる"
+# or "この設計、おかしいんじゃないの？", where the phrase is not the whole
+# utterance.
+_SENT_START = r"(?:^|[。！？!?\n])\s*"
+_SENT_END = r"(?=$|[。！？!?\n])"
+
 _STRONG = [
     # --- Japanese ---
     (re.compile(r"二度と"), "prohibition"),
     (re.compile(r"やめて|止めて|やめろ|止めろ"), "stop-directive"),
     (re.compile(r"勝手に"), "unauthorized"),
-    (re.compile(r"しないで"), "prohibition"),
+    # Exclude only completed/planned "しないでおく" forms: those describe the
+    # speaker's decision, while directives such as "しないでおいて" and
+    # "しないでおきなさい" must remain detectable.
+    (re.compile(
+        r"しないで(?!お(?:く|き(?:ます|ました|たい|たく|ません)|いた)(?=$|[。！？!?\s]))"
+    ), "prohibition"),
     (re.compile(r"前に?も(?:言|伝|お願い|頼)"), "repetition"),
     (re.compile(r"何度も(?:言|伝)"), "repetition"),
     (re.compile(r"何度(?:言|伝|指摘|お願い|頼).{0,20}(?:ば|ったら|れば)"), "repetition"),
@@ -163,10 +178,13 @@ _STRONG = [
     (re.compile(r"また同じ"), "repetition"),
     (re.compile(r"そんな(?:面倒|めんどう)"), "refusal"),
     (re.compile(r"(?:あほ|アホ|馬鹿|バカ)なこと(?:を)?(?:言|や)って(?:い)?ない(?:よね|でしょう|だろ)"), "criticism"),
-    (re.compile(r"(?:いかれてる|イカれてる|イかれてる|イカレてる)"), "criticism"),
-    (re.compile(r"おかしい(?:んじゃない|じゃない)(?:の|か|だろ)"), "criticism"),
+    (re.compile(_SENT_START + r"(?:いかれてる|イカれてる|イかれてる|イカレてる)" + _SENT_END), "criticism"),
+    (re.compile(_SENT_START + r"おかしい(?:んじゃない|じゃない)(?:のか|の|か|だろ)" + _SENT_END), "criticism"),
     (re.compile(r"言った(?:よ|でしょ|はず|じゃん)"), "repetition"),
-    (re.compile(r"絶対に[^\n]{0,80}?(?:するな|やるな|しないで)"), "prohibition"),
+    # The gap must not cross a sentence terminator, otherwise "絶対に必要です。
+    # この機能は削除しないでおきます" (two unrelated sentences) would misread as
+    # a single prohibition.
+    (re.compile(r"絶対に[^。！？!?\n]{0,80}?(?:するな|やるな|しないで)"), "prohibition"),
     # --- English --- (matched case-insensitively)
     (re.compile(r"i(?:'ve| have| already)?\s+(?:told|said)\s+you", re.I), "repetition"),
     (re.compile(r"i\s+said\s+(?:not\s+to|don'?t)", re.I), "prohibition"),

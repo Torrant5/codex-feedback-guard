@@ -122,6 +122,32 @@ class DetectorNegativeTest(unittest.TestCase):
         is_fb, _ = fbd.detect_feedback("the variable is `stop doing that`")
         self.assertFalse(is_fb)
 
+    def test_criticism_phrase_about_a_subject_not_flagged(self):
+        # These use the same criticism vocabulary as the standalone POSITIVE
+        # cases, but as an ordinary statement *about* a subject rather than a
+        # standalone/direct utterance -- must not trip the strong cue alone.
+        for p in (
+            "このAPIはいかれてる",
+            "この設計、おかしいんじゃないの？",
+            "この結果はおかしいんじゃないか",
+        ):
+            is_fb, cues = fbd.detect_feedback(p)
+            self.assertFalse(is_fb, f"should NOT flag: {p!r} (cues={cues})")
+
+    def test_absolute_prohibition_does_not_cross_sentence_boundary(self):
+        # "絶対に" and a later "しないで" in an UNRELATED following sentence
+        # must not be stitched together into a false prohibition cue.
+        is_fb, cues = fbd.detect_feedback("絶対に必要です。この機能は削除しないでおきます")
+        self.assertFalse(is_fb, f"should NOT flag: cues={cues}")
+
+    def test_shinaide_plans_are_not_directives_but_imperatives_remain(self):
+        for p in ("削除しないでおく", "削除しないでおきます", "削除しないでおいた"):
+            is_fb, cues = fbd.detect_feedback(p)
+            self.assertFalse(is_fb, f"should NOT flag: {p!r} (cues={cues})")
+        for p in ("削除しないで", "削除しないでおいて", "削除しないでおきなさい"):
+            is_fb, cues = fbd.detect_feedback(p)
+            self.assertTrue(is_fb, f"should flag: {p!r} (cues={cues})")
+
     def test_cues_are_category_labels_not_prompt_text(self):
         # Privacy: cues must be our fixed vocabulary, never lifted user text.
         _, cues = fbd.detect_feedback("二度とやめて")
