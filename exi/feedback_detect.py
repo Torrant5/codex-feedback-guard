@@ -130,6 +130,33 @@ def human_evidence_id(p_hash: str) -> str:
     return f"hp:{p_hash}"
 
 
+def mem_evidence_id(p_hash: str) -> str:
+    """Provenance id for a memory resolved from one user turn.
+
+    It is counted for a user-authoritative preference/constraint, where the user
+    statement itself is the authority.  The store explicitly excludes ``turn:``
+    ids from technical evidence counts: repeated assertions are not independent
+    verification.  The same turn resolving the same memory twice still reuses
+    this id, which prevents duplicate provenance and evidence inflation.
+    """
+    return f"turn:{p_hash}"
+
+
+def claim_fingerprint(scope: str, kind: str, claim: str) -> str:
+    """Stable id for one memory identity: kind + scope + normalized claim.
+
+    Used to make a candidate's resolutions idempotent without collapsing the
+    same wording in two legitimate scopes (the store identifies memories by
+    scope + normalized claim and also rejects a kind conflict).
+    """
+    norm_parts = [
+        re.sub(r"\s+", " ", (value or "").strip()).casefold()
+        for value in (kind, scope, claim)
+    ]
+    norm = "\x1f".join(norm_parts)[:MAX_PROMPT_CHARS]
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
+
+
 # ---------------------------------------------------------------------------
 # Code stripping (so words inside code don't read as a complaint)
 # ---------------------------------------------------------------------------
