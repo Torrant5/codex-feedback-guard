@@ -274,7 +274,8 @@ No manual `exi feedback record` is required. On every `UserPromptSubmit`:
 2. A **conservative, built-in detector** (`feedback_detect.py`) decides whether
    the prompt looks like recurring corrective feedback, in **Japanese or
    English** (e.g. `二度と` / `何度も言っている` / `再三言っている` / `やめろ` /
-   `絶対に〜するな` / `前にも言った` / `やめて` / `勝手に` / `〜しないで` /
+   `絶対に〜するな` / `あほなこと言ってないよね` / `前にも言った` / `やめて` /
+   `勝手に` / `〜しないで` /
    `そんな面倒なことできない`, `I already told you` / `don't do that again` /
    `stop doing` / `never do`). It ignores matches inside code, and requires a
    strong cue (or two distinct weak cues) so ordinary questions don't trip it.

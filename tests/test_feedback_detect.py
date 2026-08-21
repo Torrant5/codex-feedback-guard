@@ -69,6 +69,7 @@ class DetectorPositiveTest(unittest.TestCase):
         "再三言っているが、その操作はやめろ",
         "絶対にほげするな",
         "この操作は止めろ",
+        "あほなこと言ってないよね？",
         "そんな面倒なことできない",
         "また同じミスをしている",
         "I already told you not to do that",
