@@ -792,5 +792,50 @@ class NoRawPromptPersistenceTest(FeedbackHookBase):
                 self.assertNotIn("SUPERSECRETTOKEN123", data, f"raw prompt leaked into {p}")
 
 
+# --------------------------------------------------------------------------- #
+# ASCII-safe JSON on stdout (Windows consoles commonly default to CP932;
+# non-ASCII bytes in a print() can raise UnicodeEncodeError and crash the hook)
+# --------------------------------------------------------------------------- #
+class AsciiSafeJsonTest(FeedbackHookBase):
+    def test_dumps_unicode_is_ascii_only_and_round_trips(self):
+        payload = {"message": "— 日本語のフィードバック", "nested": {"x": "こんにちは"}}
+        out = feedback_hook._dumps(payload)
+        self.assertTrue(out.isascii())
+        self.assertEqual(json.loads(out), payload)
+
+    def test_user_prompt_context_stdout_is_ascii_only(self):
+        self.make_rule("jp-rule", 4, {"event": "pre_bash", "when": "x"},
+                       desc="日本語の説明文—これは全角ダッシュ")
+        _, out, _ = self.run_hook("UserPromptSubmit", {"prompt": "hi", "session_id": "s1"})
+        self.assertTrue(out.strip())
+        self.assertTrue(out.isascii())
+        self.assertIn("日本語の説明文", self.additional_context(out))
+
+    def test_deny_reason_stdout_is_ascii_only(self):
+        self.make_rule("d", 5, {"event": "pre_bash", "when": "rm -rf"}, desc="絶対にrm -rfするな")
+        _, out, _ = self.run_hook(
+            "PreToolUse",
+            {"tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/x"}, "session_id": "s1"},
+        )
+        self.assertTrue(self.is_deny(out))
+        self.assertTrue(out.isascii())
+        self.assertIn("絶対にrm -rfするな", self.deny_reason(out))
+
+    def test_stop_block_reason_stdout_is_ascii_only(self):
+        self.make_rule("no-debug", 5, {"event": "stop_check", "forbid_regex": "print\\("},
+                       desc="デバッグ用printは削除してください")
+        target = os.path.join(self.tmp.name, "x.py")
+        with open(target, "w") as f:
+            f.write("print('debug')\n")
+        st = fb.FeedbackState(data_dir=self.tmp.name)
+        with st.locked() as state:
+            fb.track_changed_files(state, codex_sid("s1"), self.tmp.name, [target])
+        _, out, _ = self.run_hook("Stop", {"session_id": "s1", "turn_id": "t1"})
+        obj = json.loads(out.strip())
+        self.assertEqual(obj.get("decision"), "block")
+        self.assertTrue(out.isascii())
+        self.assertIn("デバッグ用printは削除してください", obj["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

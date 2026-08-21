@@ -94,21 +94,26 @@ def _request(payload: dict, cfg: dict) -> Request:
 
 
 # ---- output helpers (Codex contract) ---------------------------------------
+def _dumps(obj) -> str:
+    # Windows consoles commonly default to CP932. ASCII-only JSON stays valid
+    # and decodes to the same Unicode payload, avoiding hook print failures.
+    return json.dumps(obj, ensure_ascii=True)
+
+
 def _emit_context(text: str, event: str) -> None:
-    print(json.dumps(
+    print(_dumps(
         {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}},
-        ensure_ascii=False,
     ))
 
 
 def _emit_deny(reason: str) -> None:
-    print(json.dumps({
+    print(_dumps({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": reason,
         }
-    }, ensure_ascii=False))
+    }))
     print(f"[feedback BLOCK] {reason}", file=sys.stderr)
 
 
@@ -151,10 +156,10 @@ def _handle_post_tool_use(payload: dict, cfg: dict) -> int:
 def _handle_stop(payload: dict, cfg: dict) -> int:
     outcome = feedback_core.stop_outcome(_request(payload, cfg))
     if outcome.action == "block":
-        print(json.dumps({"decision": "block", "reason": outcome.reason}, ensure_ascii=False))
+        print(_dumps({"decision": "block", "reason": outcome.reason}))
         print(f"[feedback BLOCK Stop] {outcome.reason}", file=sys.stderr)
     elif outcome.action == "capped":
-        print(json.dumps({"systemMessage": outcome.system_message}, ensure_ascii=False))
+        print(_dumps({"systemMessage": outcome.system_message}))
         print(f"[feedback Stop cap reached] {outcome.system_message}", file=sys.stderr)
     else:
         if outcome.warn_only:

@@ -122,7 +122,9 @@ def build_request(provider: str, payload: dict, cfg: dict) -> Request:
 
 # ---- encoders (neutral outcome -> surface stdout) --------------------------
 def _dumps(obj) -> str:
-    return json.dumps(obj, ensure_ascii=False)
+    # Windows consoles commonly default to CP932. ASCII-only JSON stays valid
+    # and decodes to the same Unicode payload in Copilot, avoiding hook exits.
+    return json.dumps(obj, ensure_ascii=True)
 
 
 def _encode_user_prompt(provider: str, outcome, payload: dict) -> str:

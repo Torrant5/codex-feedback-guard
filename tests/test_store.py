@@ -56,7 +56,7 @@ class StoreTest(unittest.TestCase):
         self.store.confirm(o.id, evidence_paths=["b"])
         written = self.store.promote(o.id)
         self.assertEqual(len(written), 1)
-        text = written[0].read_text()
+        text = written[0].read_text(encoding="utf-8")
         self.assertIn("CANDIDATE", text)
         self.assertIn("weak claim", text)
         # promotion does not touch anything outside data dir

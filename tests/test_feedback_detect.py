@@ -12,6 +12,7 @@ class ExtractPromptTest(unittest.TestCase):
         self.assertEqual(fbd.extract_prompt({"message": "yo"}), "yo")
         self.assertEqual(fbd.extract_prompt({"input": "q"}), "q")
         self.assertEqual(fbd.extract_prompt({"text": "t"}), "t")
+        self.assertEqual(fbd.extract_prompt({"transformedPrompt": "tp"}), "tp")
 
     def test_nested_object_and_list(self):
         self.assertEqual(fbd.extract_prompt({"prompt": {"text": "deep"}}), "deep")
@@ -65,6 +66,15 @@ class DetectorPositiveTest(unittest.TestCase):
     POSITIVE = [
         "二度と勝手にコミットしないで",
         "前にも言ったよね、やめて",
+        "何度も言っているが、勝手に変更しないで",
+        "何度言えば入るんだよ",
+        "再三言っているが、その操作はやめろ",
+        "絶対にほげするな",
+        "この操作は止めろ",
+        "あほなこと言ってないよね？",
+        "いかれてる？",
+        "イカれてる？",
+        "おかしいんじゃないのか？",
         "そんな面倒なことできない",
         "また同じミスをしている",
         "I already told you not to do that",
@@ -111,6 +121,32 @@ class DetectorNegativeTest(unittest.TestCase):
     def test_cue_inside_inline_code_ignored(self):
         is_fb, _ = fbd.detect_feedback("the variable is `stop doing that`")
         self.assertFalse(is_fb)
+
+    def test_criticism_phrase_about_a_subject_not_flagged(self):
+        # These use the same criticism vocabulary as the standalone POSITIVE
+        # cases, but as an ordinary statement *about* a subject rather than a
+        # standalone/direct utterance -- must not trip the strong cue alone.
+        for p in (
+            "このAPIはいかれてる",
+            "この設計、おかしいんじゃないの？",
+            "この結果はおかしいんじゃないか",
+        ):
+            is_fb, cues = fbd.detect_feedback(p)
+            self.assertFalse(is_fb, f"should NOT flag: {p!r} (cues={cues})")
+
+    def test_absolute_prohibition_does_not_cross_sentence_boundary(self):
+        # "絶対に" and a later "しないで" in an UNRELATED following sentence
+        # must not be stitched together into a false prohibition cue.
+        is_fb, cues = fbd.detect_feedback("絶対に必要です。この機能は削除しないでおきます")
+        self.assertFalse(is_fb, f"should NOT flag: cues={cues}")
+
+    def test_shinaide_plans_are_not_directives_but_imperatives_remain(self):
+        for p in ("削除しないでおく", "削除しないでおきます", "削除しないでおいた"):
+            is_fb, cues = fbd.detect_feedback(p)
+            self.assertFalse(is_fb, f"should NOT flag: {p!r} (cues={cues})")
+        for p in ("削除しないで", "削除しないでおいて", "削除しないでおきなさい"):
+            is_fb, cues = fbd.detect_feedback(p)
+            self.assertTrue(is_fb, f"should flag: {p!r} (cues={cues})")
 
     def test_cues_are_category_labels_not_prompt_text(self):
         # Privacy: cues must be our fixed vocabulary, never lifted user text.
