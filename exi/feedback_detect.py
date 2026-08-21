@@ -151,6 +151,7 @@ _STRONG = [
     (re.compile(r"また同じ"), "repetition"),
     (re.compile(r"そんな(?:面倒|めんどう)"), "refusal"),
     (re.compile(r"(?:あほ|アホ|馬鹿|バカ)なこと(?:を)?(?:言|や)って(?:い)?ない(?:よね|でしょう|だろ)"), "criticism"),
+    (re.compile(r"(?:いかれてる|イカれてる|イかれてる|イカレてる)"), "criticism"),
     (re.compile(r"言った(?:よ|でしょ|はず|じゃん)"), "repetition"),
     (re.compile(r"絶対に[^\n]{0,80}?(?:するな|やるな|しないで)"), "prohibition"),
     # --- English --- (matched case-insensitively)
