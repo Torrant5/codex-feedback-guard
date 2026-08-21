@@ -146,6 +146,10 @@ class CopilotCliAdapterTest(AdapterBase):
         self.assertTrue(mtp.startswith("ORIGINAL_TP_VERBATIM\n\n"))
         self.assertIn("feedback candidate", mtp)
 
+    def test_hook_output_is_ascii_safe_for_windows_console(self):
+        out = ad._dumps({"message": "— 日本語"})
+        self.assertTrue(out.isascii())
+
     def test_no_context_returns_empty_object(self):
         out, _ = self.dispatch("copilot-cli", "userPromptTransformed",
                                {"sessionId": "s1", "prompt": "just a normal question?",

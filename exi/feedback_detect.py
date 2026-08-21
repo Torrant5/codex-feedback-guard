@@ -147,11 +147,13 @@ _STRONG = [
     (re.compile(r"しないで"), "prohibition"),
     (re.compile(r"前に?も(?:言|伝|お願い|頼)"), "repetition"),
     (re.compile(r"何度も(?:言|伝)"), "repetition"),
+    (re.compile(r"何度(?:言|伝|指摘|お願い|頼).{0,20}(?:ば|ったら|れば)"), "repetition"),
     (re.compile(r"再三(?:言|伝|指摘|お願い|頼)"), "repetition"),
     (re.compile(r"また同じ"), "repetition"),
     (re.compile(r"そんな(?:面倒|めんどう)"), "refusal"),
     (re.compile(r"(?:あほ|アホ|馬鹿|バカ)なこと(?:を)?(?:言|や)って(?:い)?ない(?:よね|でしょう|だろ)"), "criticism"),
     (re.compile(r"(?:いかれてる|イカれてる|イかれてる|イカレてる)"), "criticism"),
+    (re.compile(r"おかしい(?:んじゃない|じゃない)(?:の|か|だろ)"), "criticism"),
     (re.compile(r"言った(?:よ|でしょ|はず|じゃん)"), "repetition"),
     (re.compile(r"絶対に[^\n]{0,80}?(?:するな|やるな|しないで)"), "prohibition"),
     # --- English --- (matched case-insensitively)
