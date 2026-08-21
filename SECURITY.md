@@ -1,20 +1,22 @@
 # Security Policy
 
-`codex-feedback-guard` is an unofficial, community-maintained project. It is
-not affiliated with, endorsed by, or supported by OpenAI or Anthropic.
+Agent Steward (Python distribution name `codex-feedback-guard`, kept for backward
+compatibility — see the README's [Naming](README.md#naming) note) is an
+unofficial, community-maintained project. It is not affiliated with,
+endorsed by, or supported by OpenAI, GitHub, or Anthropic.
 
 ## Scope and threat model
 
 Read the README's **Safety Model** section first — it describes, precisely,
 what this tool can and cannot enforce. In short:
 
-- It is a **backstop at Codex hook boundaries** (`PreToolUse`,
-  `UserPromptSubmit`, `PreCompact`, `PostToolUse`, `Stop`), not a sandbox.
-  A local process running as the same user as Codex can always bypass it by
-  editing the source, deleting state files, or calling the Python API
+- It is a **backstop at supported agent hook boundaries** (prompt, tool, and
+  stop events for Codex, Claude Code, and GitHub Copilot), not a sandbox. A
+  local process running as the same OS user as the agent can always bypass it
+  by editing the source, deleting state files, or calling the Python API
   directly. This is a property of the design, not a bug to report.
 - It provides **no protection at all** if the hooks are not trusted/approved
-  inside Codex.
+  inside the host agent.
 - The declarative feedback-enforcement spec language deliberately has no key
   that runs a shell command or arbitrary code. If you find an input that
   causes one to execute anyway, that **is** a security bug — see below.
@@ -41,8 +43,8 @@ for a project of this size; there's no formal SLA.
 
 ## Out of scope
 
-- The Codex or Claude Code applications themselves — report those to the
-  respective vendor.
+- The Codex, Claude Code, or GitHub Copilot applications themselves — report
+  those to the respective vendor.
 - Denial-of-service via resource exhaustion of your own machine by running
   the tool as intended (e.g. `managed-run` supervising a process you told it
   to supervise).

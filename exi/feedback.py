@@ -82,6 +82,30 @@ def auto_capture_enabled(cfg: dict) -> bool:
     fcfg = cfg.get("feedback", {}) if isinstance(cfg, dict) else {}
     return bool(fcfg.get("auto_capture", True))
 
+
+def memory_auto_capture_enabled(cfg: dict) -> bool:
+    """Whether autonomous durable-memory capture is on (default: on).
+
+    Distinct from ``feedback.auto_capture``: this governs the per-turn
+    memory-review instruction and the body-less memory candidate that backs
+    ``exi memory resolve`` — NOT the corrective-feedback loop.
+    """
+    mcfg = cfg.get("memory", {}) if isinstance(cfg, dict) else {}
+    return bool(mcfg.get("auto_capture", True))
+
+
+def memory_candidate_ttl_seconds(cfg: dict) -> int:
+    """Memory-candidate TTL, clamped to the same sane [_MIN, _MAX] window as
+    feedback candidates. Falls back to the feedback TTL / default when unset."""
+    mcfg = cfg.get("memory", {}) if isinstance(cfg, dict) else {}
+    fcfg = cfg.get("feedback", {}) if isinstance(cfg, dict) else {}
+    default = fcfg.get("candidate_ttl_seconds", DEFAULT_CANDIDATE_TTL)
+    try:
+        ttl = int(mcfg.get("candidate_ttl_seconds", default))
+    except (TypeError, ValueError):
+        ttl = DEFAULT_CANDIDATE_TTL
+    return max(_MIN_CANDIDATE_TTL, min(ttl, _MAX_CANDIDATE_TTL))
+
 # Allowed enforcement-spec keys. Anything else is rejected by validation so a
 # spec can never smuggle in an arbitrary command/checker to execute.
 _COMMON_KEYS = {"event", "severity", "message", "scope", "unless"}
@@ -943,6 +967,7 @@ class FeedbackState:
         data.setdefault("admin_approvals", [])
         data.setdefault("stop_attempts", {})
         data.setdefault("candidates", [])
+        data.setdefault("mem_candidates", [])
         return data
 
     @staticmethod
@@ -953,6 +978,7 @@ class FeedbackState:
             "admin_approvals": [],
             "stop_attempts": {},
             "candidates": [],
+            "mem_candidates": [],
             "_corrupt": corrupt,
         }
 
@@ -1324,3 +1350,95 @@ def abandon_pending(state: dict, session_id: str, now: float, ttl: int) -> list:
         c["status"] = CANDIDATE_ABANDONED
         ids.append(c["id"])
     return ids
+
+
+# ---------------------------------------------------------------------------
+# Durable-memory candidate lifecycle (disposable session-state cache)
+#
+# Distinct from the feedback candidate above and stored under its own
+# ``mem_candidates`` key. A memory candidate is opened on EVERY normal turn (no
+# trigger-word detector — the model decides what is worth remembering), so it is
+# intentionally lightweight and NEVER Stop-blocks: an unresolved one just
+# expires. It records ONLY: an internal id, the prompt HASH (never the body),
+# session/turn, a status, a creation timestamp, and the set of claim
+# fingerprints already resolved from it (so resolving the same memory twice from
+# one turn cannot inflate evidence or create noise). Statuses: pending ->
+# resolved | dismissed. `resolved` is non-terminal here — a single turn may
+# yield several DISTINCT memories, so a resolved candidate stays usable for a
+# different claim within its TTL. `dismissed` is purely for auditability and is
+# never required for an ordinary turn.
+# ---------------------------------------------------------------------------
+MEM_PENDING = "pending"
+MEM_RESOLVED = "resolved"
+MEM_DISMISSED = "dismissed"
+MAX_MEM_CANDIDATES = 2048
+MAX_MEMORIES_PER_CANDIDATE = 8
+
+
+def prune_mem_candidates(state: dict, now: float, ttl: int) -> None:
+    """Drop memory candidates older than the TTL regardless of status."""
+    kept = [
+        c for c in state.get("mem_candidates", []) if now - c.get("created_at", 0) <= ttl
+    ]
+    kept.sort(key=lambda c: c.get("created_at", 0))
+    state["mem_candidates"] = kept[-MAX_MEM_CANDIDATES:]
+
+
+def get_mem_candidate(state: dict, candidate_id: str) -> dict | None:
+    for c in state.get("mem_candidates", []):
+        if c.get("id") == candidate_id:
+            return c
+    return None
+
+
+def upsert_mem_candidate(
+    state: dict,
+    candidate_id: str,
+    session_id: str,
+    turn_id: str,
+    p_hash: str,
+    now: float,
+    ttl: int,
+) -> str:
+    """Ensure a pending memory candidate exists; return its current status.
+
+    Idempotent per (session, turn, prompt-hash) id: a re-detection never
+    duplicates and never resurrects a resolved/dismissed candidate's lifecycle
+    (it just returns its status). No prompt body is ever stored.
+    """
+    prune_mem_candidates(state, now, ttl)
+    existing = get_mem_candidate(state, candidate_id)
+    if existing is not None:
+        return existing.get("status", MEM_PENDING)
+    state.setdefault("mem_candidates", []).append(
+        {
+            "id": candidate_id,
+            "hash": p_hash,
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "status": MEM_PENDING,
+            "resolved_claims": [],
+            "created_at": now,
+        }
+    )
+    return "created"
+
+
+def set_mem_candidate_status(state: dict, candidate_id: str, status: str, **extra) -> bool:
+    c = get_mem_candidate(state, candidate_id)
+    if c is None:
+        return False
+    c["status"] = status
+    for k, v in extra.items():
+        c[k] = v
+    return True
+
+
+def mem_claim_already_resolved(candidate: dict, claim_fp: str) -> bool:
+    return claim_fp in candidate.get("resolved_claims", [])
+
+
+def mark_mem_claim_resolved(candidate: dict, claim_fp: str) -> None:
+    resolved = candidate.setdefault("resolved_claims", [])
+    if claim_fp not in resolved:
+        resolved.append(claim_fp)

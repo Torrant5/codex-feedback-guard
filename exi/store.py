@@ -16,7 +16,9 @@ still one source — fragments identify *where in* a source, not a second,
 independent source. An observation is only eligible to be `confirmed` (and
 thus promoted) once it has >= 2 independent (distinct-source-key) evidence
 sources; with fewer it stays a `candidate`. This is enforced here, not left
-to the caller — no silent promotion.
+to the caller — no silent promotion. For autonomous technical-memory kinds,
+``turn:`` prompt-provenance ids are excluded from that count; only actual cited
+sources can confirm the observation.
 """
 from __future__ import annotations
 
@@ -45,10 +47,40 @@ def evidence_source_key(evidence: str) -> str:
     """
     return evidence.split("#", 1)[0]
 
+
+def independent_evidence_count(evidence_paths: list, kind: str = "") -> int:
+    """Count genuine independent sources for an observation.
+
+    ``turn:`` ids are provenance for the user turn that authorized a preference
+    or constraint.  They are deliberately *not* technical evidence: a user
+    assertion repeated with different wording is still not verification of an
+    environment fact, procedure, root cause, or decision.
+    """
+    keys = {evidence_source_key(p) for p in evidence_paths}
+    if kind in MEM_KINDS and kind not in AUTHORITATIVE_KINDS:
+        keys = {k for k in keys if not k.startswith("turn:")}
+    return len(keys)
+
 STATUS_CANDIDATE = "candidate"
 STATUS_CONFIRMED = "confirmed"
 STATUS_SUPERSEDED = "superseded"
 STATUS_RETIRED = "retired"
+# User-authoritative memory. A direct, stable user preference/constraint is
+# authoritative *because the user stated it* — it is retrievable immediately
+# from a single source (the turn) WITHOUT pretending it has two independent
+# technical evidence sources. This is intentionally distinct from
+# STATUS_CONFIRMED, which still requires >= MIN_INDEPENDENT_EVIDENCE genuine,
+# distinct sources and is reserved for verified technical facts/procedures/
+# root-causes. `active` observations never get promoted by evidence count and
+# are never downgraded by the evidence discipline; retirement/supersession
+# still apply. See `remember()` and README "trust/evidence rules".
+STATUS_ACTIVE = "active"
+
+# Fixed vocabulary of durable-memory kinds (metadata only; the store never
+# executes on them). `preference`/`constraint` are user-authoritative (see
+# AUTHORITATIVE_KINDS); the rest follow the confirmed-evidence discipline.
+MEM_KINDS = ("preference", "constraint", "environment", "procedure", "root-cause", "decision")
+AUTHORITATIVE_KINDS = ("preference", "constraint")
 
 # Absolute ceilings on automatic memory retrieval, enforced no matter what a
 # per-user config says (config can only make these SMALLER — see the `retrieve`
@@ -120,6 +152,14 @@ def _gen_id(scope: str, claim: str, ts: float) -> str:
     return h[:12]
 
 
+def normalize_claim(claim: str) -> str:
+    """Collapse whitespace + casefold so trivially different wordings of the
+    *same* claim within a scope dedup identically (drives `remember`'s
+    match-or-create decision, so restating a memory reinforces it in place
+    instead of spawning a near-duplicate observation)."""
+    return re.sub(r"\s+", " ", (claim or "").strip()).casefold()
+
+
 @dataclass
 class Observation:
     id: str
@@ -133,6 +173,7 @@ class Observation:
     review_after: str = ""
     supersedes: str = ""
     triggers: list = field(default_factory=list)
+    kind: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -147,6 +188,7 @@ class Observation:
             "review_after": self.review_after,
             "supersedes": self.supersedes,
             "triggers": list(self.triggers),
+            "kind": self.kind,
         }
 
 
@@ -219,9 +261,15 @@ class Store:
                     review_after=ev.get("review_after", ""),
                     supersedes=ev.get("supersedes", ""),
                     triggers=list(ev.get("triggers", [])),
+                    kind=ev.get("kind", ""),
                 )
-                obs.confirmed_count = len({evidence_source_key(p) for p in obs.evidence_paths})
-                obs.status = self._status_for(obs)
+                obs.confirmed_count = independent_evidence_count(obs.evidence_paths, obs.kind)
+                if ev.get("authoritative"):
+                    # User-authoritative: retrievable now on a single (turn)
+                    # source; NOT faking two independent technical sources.
+                    obs.status = STATUS_ACTIVE
+                else:
+                    obs.status = self._status_for(obs)
                 state[obs.id] = obs
                 # A capture may supersede an earlier observation.
                 if obs.supersedes and obs.supersedes in state:
@@ -233,11 +281,13 @@ class Store:
                 for p in ev.get("evidence_paths", []):
                     if p not in obs.evidence_paths:
                         obs.evidence_paths.append(p)
-                obs.confirmed_count = len({evidence_source_key(p) for p in obs.evidence_paths})
+                obs.confirmed_count = independent_evidence_count(obs.evidence_paths, obs.kind)
                 obs.last_verified = ev.get("ts", obs.last_verified)
                 if ev.get("review_after"):
                     obs.review_after = ev["review_after"]
-                if obs.status not in (STATUS_SUPERSEDED, STATUS_RETIRED):
+                # A reinforcing source never downgrades a user-authoritative
+                # `active` memory back into the candidate/confirmed ladder.
+                if obs.status not in (STATUS_SUPERSEDED, STATUS_RETIRED, STATUS_ACTIVE):
                     obs.status = self._status_for(obs)
             elif t == "verify":
                 obs = state.get(ev["id"])
@@ -254,7 +304,7 @@ class Store:
 
     @staticmethod
     def _status_for(obs: Observation) -> str:
-        if obs.status in (STATUS_SUPERSEDED, STATUS_RETIRED):
+        if obs.status in (STATUS_SUPERSEDED, STATUS_RETIRED, STATUS_ACTIVE):
             return obs.status
         if obs.confirmed_count >= MIN_INDEPENDENT_EVIDENCE:
             return STATUS_CONFIRMED
@@ -275,9 +325,14 @@ class Store:
         triggers: list | None = None,
         supersedes: str = "",
         review_after: str = "",
+        kind: str = "",
+        authoritative: bool = False,
     ) -> Observation:
         with self._locked():
-            return self._capture_unlocked(scope, claim, evidence_paths, triggers, supersedes, review_after)
+            return self._capture_unlocked(
+                scope, claim, evidence_paths, triggers, supersedes, review_after,
+                kind, authoritative,
+            )
 
     def _capture_unlocked(
         self,
@@ -287,6 +342,8 @@ class Store:
         triggers: list | None,
         supersedes: str,
         review_after: str,
+        kind: str = "",
+        authoritative: bool = False,
     ) -> Observation:
         if not scope or not claim:
             raise ValueError("capture requires both --scope and --claim")
@@ -302,13 +359,15 @@ class Store:
             "type": "capture",
             "ts": _iso(ts),
             "id": obs_id,
-            "status": STATUS_CANDIDATE,
+            "status": STATUS_ACTIVE if authoritative else STATUS_CANDIDATE,
             "scope": scope,
             "claim": claim,
             "evidence_paths": evidence_paths,
             "triggers": triggers or [],
             "supersedes": supersedes,
             "review_after": review_after,
+            "kind": kind,
+            "authoritative": bool(authoritative),
         }
         self._append_event(event)
         self._reindex()
@@ -378,6 +437,86 @@ class Store:
         self._append_event({"type": "retire", "id": obs_id})
         self._reindex()
         return self.derive().get(obs_id)
+
+    # ---- durable-memory capture (match-or-create) --------------------------
+    def remember(
+        self,
+        scope: str,
+        claim: str,
+        kind: str,
+        evidence_paths: list,
+        triggers: list | None = None,
+        authoritative: bool = False,
+        review_after: str = "",
+    ) -> tuple["Observation", str]:
+        """Record a durable memory, deduping by (scope, normalized claim).
+
+        Returns ``(observation, action)`` where ``action`` is one of:
+
+        * ``"created"``   — a new observation (``active`` when authoritative;
+          otherwise candidate with one actual source, or confirmed immediately
+          when the caller supplied >=2 actual independent sources).
+        * ``"reinforced"``— an existing observation gained a new, distinct
+          evidence source. For a one-source technical memory, the second actual
+          independent source promotes it candidate -> confirmed; an ``active``
+          memory stays active.
+        * ``"duplicate"`` — the same claim from the same source (same evidence
+          source key) as already on file: NOTHING is appended, so a memory
+          resolved twice from one turn can never inflate evidence or spawn noise.
+
+        This is how the confirmed-memory safety model is preserved: authority is
+        an explicit, honest status (single user source) and is never conflated
+        with evidence-count confirmation. See STATUS_ACTIVE.
+        """
+        with self._locked():
+            if not scope or not claim:
+                raise ValueError("remember requires both scope and claim")
+            if not evidence_paths:
+                raise ValueError("remember requires at least one evidence source")
+            if kind and kind not in MEM_KINDS:
+                raise ValueError(f"unknown memory kind {kind!r}; allowed: {list(MEM_KINDS)}")
+            expected_authoritative = kind in AUTHORITATIVE_KINDS
+            if authoritative != expected_authoritative:
+                raise ValueError(
+                    "authoritative trust must match the memory kind: "
+                    "preference/constraint are authoritative; technical kinds are not"
+                )
+            evidence_paths = list(dict.fromkeys(evidence_paths))
+            state = self.derive()
+            norm = normalize_claim(claim)
+            match = None
+            for o in state.values():
+                if o.status in (STATUS_SUPERSEDED, STATUS_RETIRED):
+                    continue
+                if o.scope == scope and normalize_claim(o.claim) == norm:
+                    match = o
+                    break
+            if match is None:
+                obs = self._capture_unlocked(
+                    scope, claim, evidence_paths, triggers or [], "", review_after,
+                    kind, authoritative,
+                )
+                return obs, "created"
+            if match.kind and match.kind != kind:
+                raise ValueError(
+                    f"memory kind conflict for existing observation {match.id}: "
+                    f"stored={match.kind!r}, requested={kind!r}"
+                )
+            existing_keys = {evidence_source_key(p) for p in match.evidence_paths}
+            new_paths = [p for p in evidence_paths
+                         if evidence_source_key(p) not in existing_keys]
+            if not new_paths:
+                return match, "duplicate"
+            self._append_event(
+                {
+                    "type": "confirm",
+                    "id": match.id,
+                    "evidence_paths": new_paths,
+                    "review_after": review_after,
+                }
+            )
+            self._reindex()
+            return self.derive().get(match.id), "reinforced"
 
     # ---- FTS5 index --------------------------------------------------------
     def _open_index(self) -> sqlite3.Connection:
@@ -463,13 +602,16 @@ class Store:
             con.close()
 
     def _is_current(self, obs: "Observation", now_iso: str) -> bool:
-        """Injectable iff confirmed, not superseded/retired, and not review-stale.
+        """Injectable iff retrievable-status, not superseded/retired, not stale.
 
-        A confirmed observation whose ``review_after`` has passed is treated as
-        stale (needs human re-verification) and is NOT auto-injected, so an
-        out-of-date memory can't silently keep steering the agent.
+        Retrievable statuses are ``confirmed`` (verified technical knowledge with
+        >= 2 independent sources) and ``active`` (user-authoritative preference/
+        constraint). An observation whose ``review_after`` has passed is treated
+        as stale (needs human re-verification) and is NOT auto-injected, so an
+        out-of-date memory can't silently keep steering the agent. Candidates,
+        superseded, and retired items are always excluded.
         """
-        if obs.status != STATUS_CONFIRMED:
+        if obs.status not in (STATUS_CONFIRMED, STATUS_ACTIVE):
             return False
         if obs.review_after and obs.review_after <= now_iso:
             return False

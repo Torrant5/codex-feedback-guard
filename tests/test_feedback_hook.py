@@ -93,7 +93,8 @@ class InjectionTest(FeedbackHookBase):
     def test_budget_capped(self):
         cfg_path = os.path.join(self.tmp.name, "cfg.json")
         with open(cfg_path, "w") as f:
-            json.dump({"feedback": {"inject_max_chars": 400, "inject_min_count": 3}}, f)
+            json.dump({"feedback": {"inject_max_chars": 400, "inject_min_count": 3},
+                       "memory": {"auto_capture": False}}, f)
         os.environ["EXI_CONFIG"] = cfg_path
         for i in range(20):
             self.make_rule(f"r{i:02d}", 3 + (i % 5), {"event": "pre_bash", "when": "x"},
@@ -107,7 +108,8 @@ class InjectionTest(FeedbackHookBase):
         # Config can never raise the injection budget above the absolute 3000.
         cfg_path = os.path.join(self.tmp.name, "cfg.json")
         with open(cfg_path, "w") as f:
-            json.dump({"feedback": {"inject_max_chars": 100000, "inject_min_count": 3}}, f)
+            json.dump({"feedback": {"inject_max_chars": 100000, "inject_min_count": 3},
+                       "memory": {"auto_capture": False}}, f)
         os.environ["EXI_CONFIG"] = cfg_path
         for i in range(80):
             self.make_rule(f"r{i:02d}", 3, {"event": "pre_bash", "when": "x"}, desc="X" * 90)
@@ -605,7 +607,8 @@ class ZeroClickCaptureTest(FeedbackHookBase):
     def test_memory_bounded_by_config_chars(self):
         cfg_path = os.path.join(self.tmp.name, "cfg.json")
         with open(cfg_path, "w") as f:
-            json.dump({"memory": {"inject_max_chars": 200, "inject_max_results": 10}}, f)
+            json.dump({"memory": {"inject_max_chars": 200, "inject_max_results": 10,
+                                  "auto_capture": False}}, f)
         os.environ["EXI_CONFIG"] = cfg_path
         obs = Store(data_dir=self.tmp.name)
         for i in range(10):
@@ -695,7 +698,11 @@ class ResolveDismissCliTest(FeedbackHookBase):
         self.assertEqual(rc, 0)
         st = fb.FeedbackState(data_dir=self.tmp.name)
         with st.locked() as state:
-            self.assertEqual(fb.get_candidate(state, cid)["status"], "dismissed")
+            candidate = fb.get_candidate(state, cid)
+            self.assertEqual(candidate["status"], "dismissed")
+            self.assertNotIn("reason", candidate)
+        with open(os.path.join(self.tmp.name, "feedback-state.json"), "rb") as f:
+            self.assertNotIn(b"just quoting", f.read())
         # No rule created by a dismiss.
         self.assertEqual(self.store.list(), [])
 

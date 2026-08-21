@@ -63,8 +63,15 @@ class RuntimeRoutingTest(HookCliBase):
                       json.loads(out)["hookSpecificOutput"]["additionalContext"])
 
     def test_copilot_cli_routing_empty_object(self):
-        rc, out, _ = self.run_cli(["copilot-cli", "userPromptTransformed"],
-                                  {"sessionId": "s1", "prompt": "normal", "transformedPrompt": "TP"})
+        cfg_path = os.path.join(self.tmp.name, "cfg.json")
+        with open(cfg_path, "w") as f:
+            json.dump({"memory": {"auto_capture": False}}, f)
+        os.environ["EXI_CONFIG"] = cfg_path
+        try:
+            rc, out, _ = self.run_cli(["copilot-cli", "userPromptTransformed"],
+                                      {"sessionId": "s1", "prompt": "normal", "transformedPrompt": "TP"})
+        finally:
+            os.environ.pop("EXI_CONFIG", None)
         self.assertEqual(rc, 0)
         self.assertEqual(json.loads(out), {})
 

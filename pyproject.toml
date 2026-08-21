@@ -2,10 +2,13 @@
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
+# Distribution name kept as codex-feedback-guard for backward compatibility
+# with existing installs (`pip install codex-feedback-guard`); the project's
+# public/display name is "Agent Steward".
 [project]
 name = "codex-feedback-guard"
 version = "0.1.0"
-description = "Unofficial community tools: a budget guard for Codex CLI hooks, plus an evidence-backed feedback/knowledge store."
+description = "Provider-neutral local memory, feedback, continuity, and safety tools for AI coding agents."
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Torrant5" }]
@@ -23,8 +26,8 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/Torrant5/codex-feedback-guard"
-Issues = "https://github.com/Torrant5/codex-feedback-guard/issues"
+Homepage = "https://github.com/Torrant5/agent-steward"
+Issues = "https://github.com/Torrant5/agent-steward/issues"
 
 [project.scripts]
 exi = "exi.exicli:main"

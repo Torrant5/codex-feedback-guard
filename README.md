@@ -1,12 +1,31 @@
-# codex-feedback-guard
+# Agent Steward
+
+> A provider-neutral local continuity, memory, feedback, and safety layer for
+> AI coding agents.
 
 **Unofficial, community-maintained project. Not affiliated with, endorsed
 by, or supported by OpenAI, GitHub, or Anthropic.** The product names below
 (OpenAI Codex CLI, Anthropic Claude Code, GitHub Copilot) refer to those
 tools' hook systems, which this project integrates with as an external tool —
-it does not modify or redistribute any of them. (The package/CLI keep the
-`codex-*`/`exi` names for backward compatibility; the feedback/memory engine is
-provider-neutral.)
+it does not modify or redistribute any of them. (The distribution/CLI keep the
+`codex-*`/`exi` names for backward compatibility — see [Naming](#naming)
+below; the feedback/memory engine is provider-neutral.)
+
+## Naming
+
+This project's display name is **Agent Steward**; the GitHub repository is
+[`Torrant5/agent-steward`](https://github.com/Torrant5/agent-steward). For
+existing installs, nothing under the hood changes: the Python distribution
+name stays `codex-feedback-guard`, the console scripts stay
+`exi` / `exi-hook` / `codex-guard`, the on-disk data/config directories stay
+named `codex-feedback-guard` (see [Configuration](#configuration)), hook
+identifiers are unchanged, and the `EXI_*` environment variables
+(`EXI_CONFIG`, `EXI_DATA_DIR`, etc.) are unchanged. Only the repository
+location and the project's public name have changed. Existing clones and
+virtual environments do **not** need to be renamed: GitHub redirects the old
+repository URL, and the old local folder names continue to work. The install
+examples below use the new names; when updating an existing install, keep using
+the paths where it is already installed.
 
 Standard-library-only tools that share one design goal: make agent work
 **accountable** — knowledge is shared with evidence, recurring corrective
@@ -17,11 +36,13 @@ long Codex runs cannot silently burn a week of quota in a day.
   evidence, search them (SQLite FTS5), and surface confirmed knowledge as
   human-reviewable **promotion candidates**. It never edits `AGENTS.md`,
   `CLAUDE.md`, or any skill file for you.
-- **Feedback / memory engine** (`exi-hook`) — automatic confirmed-memory
-  retrieval and zero-click corrective-feedback capture + graded enforcement,
-  delivered through hooks on **four surfaces**: OpenAI Codex CLI, Anthropic
-  Claude Code, and GitHub Copilot in both **VS Code (Copilot Agent)** and the
-  **Copilot CLI**. One provider-neutral policy core; a thin adapter per surface.
+- **Feedback / memory engine** (`exi-hook`) — automatic memory retrieval,
+  **autonomous durable-memory capture** (the active model decides what is worth
+  keeping; no magic words, no manual user commands), and zero-click
+  corrective-feedback capture + graded enforcement, delivered through hooks on
+  **four surfaces**: OpenAI Codex CLI, Anthropic Claude Code, and GitHub Copilot
+  in both **VS Code (Copilot Agent)** and the **Copilot CLI**. One
+  provider-neutral policy core; a thin adapter per surface.
 - **`codex-guard`** — a **Codex-only** budget guard. Codex hooks watch each
   turn for runaway time, tool-call floods, tight loops, and weekly-quota
   burn, and *deny* the offending tool call before it runs. A `managed-run`
@@ -53,10 +74,10 @@ terminal has not activated the virtual environment and `exi-hook` is not on
 ### Recommended per-user install (macOS/Linux)
 
 ```bash
-EXI_SOURCE="$HOME/.local/src/codex-feedback-guard" \
-  && EXI_VENV="$HOME/.local/share/codex-feedback-guard-venv" \
+EXI_SOURCE="$HOME/.local/src/agent-steward" \
+  && EXI_VENV="$HOME/.local/share/agent-steward-venv" \
   && mkdir -p "$HOME/.local/src" "$HOME/.local/share" \
-  && git clone https://github.com/Torrant5/codex-feedback-guard.git "$EXI_SOURCE" \
+  && git clone https://github.com/Torrant5/agent-steward.git "$EXI_SOURCE" \
   && python3 -m venv "$EXI_VENV" \
   && "$EXI_VENV/bin/python" -m pip install "$EXI_SOURCE"
 ```
@@ -64,10 +85,10 @@ EXI_SOURCE="$HOME/.local/src/codex-feedback-guard" \
 Install only the surfaces you actually use:
 
 ```bash
-EXI_VENV="$HOME/.local/share/codex-feedback-guard-venv" \
+EXI_VENV="$HOME/.local/share/agent-steward-venv" \
   && "$EXI_VENV/bin/codex-guard" install-hooks
 
-EXI_VENV="$HOME/.local/share/codex-feedback-guard-venv" \
+EXI_VENV="$HOME/.local/share/agent-steward-venv" \
   && "$EXI_VENV/bin/exi-hook" install claude --scope user \
   --exe "$EXI_VENV/bin/exi-hook"
 ```
@@ -83,10 +104,10 @@ This is the recommended machine-wide setup for the stated Windows + Copilot
 VS Code use case. It needs Python 3.11+ and Git, but no administrator access:
 
 ```powershell
-$ExiSource = Join-Path $HOME "Tools\codex-feedback-guard"
-$ExiVenv = Join-Path $HOME ".codex-feedback-guard-venv"
+$ExiSource = Join-Path $HOME "Tools\agent-steward"
+$ExiVenv = Join-Path $HOME ".agent-steward-venv"
 New-Item -ItemType Directory -Force (Split-Path $ExiSource) | Out-Null
-git clone https://github.com/Torrant5/codex-feedback-guard.git $ExiSource
+git clone https://github.com/Torrant5/agent-steward.git $ExiSource
 py -m venv $ExiVenv
 & "$ExiVenv\Scripts\python.exe" -m pip install $ExiSource
 & "$ExiVenv\Scripts\exi-hook.exe" install copilot-vscode `
@@ -117,11 +138,20 @@ you give corrective feedback.
 
 ### Updating an existing install
 
+Set the source and virtual-environment variables to the directories that are
+actually present on that machine. The examples below show the new default
+names. An installation created from the older documentation normally uses
+`~/.local/src/codex-feedback-guard` and
+`~/.local/share/codex-feedback-guard-venv` on macOS/Linux, or
+`$HOME\Tools\codex-feedback-guard` and
+`$HOME\.codex-feedback-guard-venv` on Windows; keep those old values unless you
+have deliberately renamed the local directories.
+
 macOS/Linux:
 
 ```bash
-EXI_SOURCE="$HOME/.local/src/codex-feedback-guard" \
-  && EXI_VENV="$HOME/.local/share/codex-feedback-guard-venv" \
+EXI_SOURCE="$HOME/.local/src/agent-steward" \
+  && EXI_VENV="$HOME/.local/share/agent-steward-venv" \
   && git -C "$EXI_SOURCE" pull --ff-only \
   && "$EXI_VENV/bin/python" -m pip install --force-reinstall --no-deps "$EXI_SOURCE"
 ```
@@ -129,8 +159,8 @@ EXI_SOURCE="$HOME/.local/src/codex-feedback-guard" \
 Windows PowerShell:
 
 ```powershell
-$ExiSource = Join-Path $HOME "Tools\codex-feedback-guard"
-$ExiVenv = Join-Path $HOME ".codex-feedback-guard-venv"
+$ExiSource = Join-Path $HOME "Tools\agent-steward"
+$ExiVenv = Join-Path $HOME ".agent-steward-venv"
 git -C $ExiSource pull --ff-only
 & "$ExiVenv\Scripts\python.exe" -m pip install --force-reinstall --no-deps $ExiSource
 ```
@@ -145,8 +175,8 @@ For development, cloning anywhere permanent and installing editable is also
 supported:
 
 ```bash
-git clone https://github.com/Torrant5/codex-feedback-guard.git \
-  && cd codex-feedback-guard \
+git clone https://github.com/Torrant5/agent-steward.git \
+  && cd agent-steward \
   && python3 -m pip install -e .
 ```
 
@@ -170,15 +200,16 @@ required.
 
 ## Architecture and features
 
-Both tools share one package (`exi/`) and one config-loading layer
+The components share one package (`exi/`) and one config-loading layer
 (`exi/config.py`), but are otherwise independent:
 
 | Module | Responsibility |
 |---|---|
-| `exi/store.py` | Append-only observation log, FTS5 search, promotion candidates, **automatic relevance retrieval** |
-| `exi/exicli.py` | `exi` command line (capture/search/list/promote/audit/confirm/verify/retire + `feedback` incl. `resolve`/`dismiss`/`candidates`) |
-| `exi/feedback.py` | Feedback-rule store, declarative enforcement engine, severity ladder, **pending-candidate lifecycle** |
-| `exi/feedback_detect.py` | Robust prompt extraction + conservative JA/EN corrective-feedback detector (no model/API call) |
+| `exi/store.py` | Append-only observation log, FTS5 search, promotion candidates, **automatic relevance retrieval**, **durable-memory `remember()` (user-authoritative `active` vs evidence-disciplined `confirmed`)** |
+| `exi/exicli.py` | `exi` command line (capture/search/list/promote/audit/confirm/verify/retire + `feedback` incl. `resolve`/`dismiss`/`candidates` + **`memory` incl. `resolve`/`dismiss`/`candidates`**) |
+| `exi/feedback.py` | Feedback-rule store, declarative enforcement engine, severity ladder, **pending feedback- and memory-candidate lifecycles** |
+| `exi/feedback_detect.py` | Robust prompt extraction + conservative JA/EN corrective-feedback detector + candidate/evidence id derivation (no model/API call) |
+| `exi/secretscan.py` | Conservative, standard-library secret/credential rejecter for durable-memory content (no network/LLM) |
 | `exi/feedback_core.py` | **Provider-neutral policy engine** — all feedback/memory policy as neutral outcome objects (single source of truth) |
 | `exi/feedback_hook.py` | **Codex adapter** over `feedback_core` (normalize payload → encode Codex output); backward-compatible entry point |
 | `exi/feedback_adapters.py` | **Claude / Copilot-VS Code / Copilot-CLI adapters** over `feedback_core` |
@@ -443,9 +474,91 @@ context — no `exi search` needed.
   `(evidence xN)` line — **never a conversation body**. If the store is empty or
   corrupt, a short diagnostic goes to stderr and the turn proceeds (fail-open).
 
-Memory retrieval, confirmed-rule injection, approval handling, and the
-candidate instruction are merged into **one** valid `UserPromptSubmit` hook
-document — no multiple JSON docs, no shadowing.
+Memory retrieval, confirmed-rule injection, approval handling, the feedback
+candidate instruction, and the durable-memory capture instruction (below) are
+merged into **one** valid `UserPromptSubmit` hook document — no multiple JSON
+docs, no shadowing.
+
+### Autonomous durable-memory capture
+
+**There are no magic words and no manual user commands.** You never say
+「覚えて」 / "remember this", and you never run any `exi` command yourself. On
+**every normal turn** on all four surfaces, the `UserPromptSubmit` hook appends
+one concise, provider-neutral instruction telling the *active agent* (Codex /
+Claude / Copilot) to judge the whole turn for knowledge worth keeping and, only
+if something qualifies, to record it **silently** via an internal
+`exi memory resolve` call. There is **no trigger-word detector** — the model
+decides. A turn with nothing worth remembering needs **no command at all**; the
+body-less candidate that backs the instruction simply expires. This never blocks
+the agent from stopping and never loops.
+
+**What is remembered (only these):** stable user preferences/constraints, stable
+environment facts, verified reusable procedures, verified root causes, and
+decisions likely to matter in future sessions.
+
+**What is never remembered:** ephemeral status, speculation, one-off requests,
+generic knowledge already in the model's training, and anything secret-like
+(credentials/tokens/keys — see Privacy).
+
+#### Trust and evidence rules
+
+Two honest trust levels, kept deliberately distinct:
+
+* **User-authoritative (`active`).** A direct, stable user *preference* or
+  *constraint* is authoritative because the user stated it. It becomes
+  retrievable **immediately** from the single turn as an `active` memory. It is
+  **not** dressed up as having two independent technical sources — its
+  initial `confirmed_count` honestly stays 1; authority, not evidence count,
+  makes it active.
+* **Evidence-disciplined (`confirmed`).** A verified technical fact / procedure
+  / root cause follows the **existing** confirmed-memory safety model unchanged:
+  it starts as a non-retrievable `candidate` and only becomes retrievable once
+  it has **≥ 2 actual independent evidence sources** (for example, two distinct
+  files, logs, or URLs). A user-turn hash is provenance only and **never counts
+  as technical evidence**; repeating an assertion in a later turn therefore
+  cannot confirm it. The system never fakes independence by treating "the agent
+  reviewed it" or a user prompt as verification.
+
+Resolving the same memory twice from one turn is idempotent (no evidence
+inflation, no duplicate observation); a single turn may still record several
+**distinct** memories (hard-capped at 8). Candidate cache size and canonical
+claim/scope/trigger/evidence lengths are also hard-capped before persistence, so
+an agent cannot grow the local state without bound or hide a secret past the
+scanner's bounded input. `exi memory resolve` can only **add** an observation or a
+distinct evidence source — it can never alter, supersede, retire, or delete an
+existing observation. Each call is candidate-bound and one-shot-idempotent.
+
+Retrieval (previous section) surfaces both `confirmed` technical observations
+**and** `active` user-authoritative memories, clearly labelled and bounded;
+candidates, expired/stale, retired, and superseded items stay excluded.
+
+#### The commands the agent runs (never you)
+
+```bash
+# record a durable memory (the candidate id comes from the hook instruction;
+# preference/constraint provenance is derived from the candidate)
+exi memory resolve --candidate <id> \
+  --kind preference \
+  --scope "workflow/testing" \
+  --claim "Run the test suite before committing" \
+  --trigger commit
+#   kinds: preference | constraint | environment | procedure | root-cause | decision
+#   preference/constraint -> active immediately.
+#   technical kinds require --evidence and need 2 actual independent sources.
+
+# (optional, for the audit trail; NEVER required for an ordinary turn)
+exi memory dismiss --candidate <id> --reason "nothing durable this turn"
+# the reason is printed for the current agent but is not persisted
+```
+
+#### Audit commands (safe for you to run)
+
+```bash
+exi memory candidates          # session-cache candidates (hash + metadata only)
+exi list --status active       # user-authoritative memories currently retrievable
+exi list --status confirmed    # evidence-confirmed technical memories
+exi audit                      # under-evidenced candidates, review-due, promotable
+```
 
 ### `codex-guard` — Codex budget guard
 
@@ -546,9 +659,17 @@ Other safety properties:
   and the hook fails open (no enforcement that call) instead of spinning.
   No external dependency is used.
 * No secrets or conversation bodies are stored or injected; only rules,
-  evidence ids, counters, hashed fingerprints, and short-lived nonces.
-  State is limited to counters, **hashed** tool-call fingerprints, and
-  weekly-usage percentages (`data/guard-state.json`).
+  memories (agent-authored, secret-scanned claims), evidence ids, counters,
+  hashed fingerprints, and short-lived nonces. State is limited to counters,
+  **hashed** tool-call fingerprints, and weekly-usage percentages
+  (`data/guard-state.json`).
+* **Durable-memory capture is candidate-bound and additive-only.** Autonomous
+  `exi memory resolve` can only append an observation or a distinct evidence
+  source; it can never disable/alter/supersede/retire/delete an existing
+  observation. User-authoritative preferences become retrievable as an explicit
+  `active` status (honest single source); verified technical facts keep the
+  existing ≥2-independent-evidence `confirmed` discipline. No raw prompt is
+  retained and no LLM/network/metered API is called from any hook.
 * **Raw user prompts are never persisted.** The zero-click capture loop stores
   only a non-reversible prompt **hash**, timestamps, session/turn, and detection
   **cue categories** (a fixed vocabulary — never text lifted from the prompt) in
@@ -678,11 +799,23 @@ Copilot CLI, matching the surface actually in use.
   per-user data dir (XDG / `%LOCALAPPDATA%` / `EXI_DATA_DIR`), never in the
   working tree.
 - **Raw prompts and transcripts are never persisted.** A detected feedback
-  candidate stores only a non-reversible prompt **hash** plus coarse cue
-  *category labels* (our fixed vocabulary — never substrings of the prompt).
-  The Copilot CLI transformed prompt is echoed back verbatim in
+  candidate and a per-turn memory candidate each store only a non-reversible
+  prompt **hash** plus fixed metadata (session/turn/status/timestamps; feedback
+  adds coarse cue *category labels* from our fixed vocabulary — never substrings
+  of the prompt). No prompt body, assistant output, or tool output is ever
+  written. The Copilot CLI transformed prompt is echoed back verbatim in
   `modifiedTransformedPrompt` but never written to disk. (Tested: a suite scans
-  the whole data dir to prove a secret in the prompt never lands in any file.)
+  the whole data dir across all four surfaces to prove a secret in the prompt —
+  or in the CLI transformed prompt — never lands in any file.)
+- **No secrets in durable memory.** The canonical claim, scope, triggers, and
+  evidence ids that land in the observation store are authored by the agent, not
+  copied from the prompt, and are run through a conservative secret/credential
+  rejecter (`secretscan`): a claim that looks like it carries a key/token/
+  password is **refused** (not silently redacted) so the model re-states it
+  without the secret. A candidate-bound `exi memory resolve` call can only add
+  an observation/evidence source, never alter or delete one. Candidate binding
+  is not, by itself, a proof that the model was uninfluenced by untrusted
+  repository/tool content; see Limitations below.
 - **Personal and corporate machines stay separate by default.** There is **no
   automatic cloud sync** and no cross-machine transport. Session ids are
   namespaced per provider so co-located agents share the local store safely, but
@@ -711,8 +844,17 @@ per-user `config.json`; it is deep-merged over the defaults. Keys:
   feedback candidate lives before it expires (clamped to 60 … 7 days).
 - `memory.inject_max_results` (default 5, hard ceiling 10) /
   `memory.inject_max_chars` (default 1500, hard ceiling 2000) /
-  `memory.min_relevance` (default 2) — automatic memory-retrieval budget and
+  `memory.min_relevance` (default 2) — automatic memory-**retrieval** budget and
   relevance floor. Config can only *lower* the two hard ceilings.
+- `memory.auto_capture` (default `true`) — autonomous durable-memory **capture**:
+  the per-turn "assess this turn for durable knowledge" instruction and the
+  body-less memory candidate that backs `exi memory resolve`. This is a
+  **distinct** switch from `feedback.auto_capture` (the corrective-feedback
+  loop) and from retrieval — retrieval alone is *not* "automatic memory". Set
+  `false` to turn autonomous capture off entirely; defaults provide the
+  autonomous behavior.
+- `memory.candidate_ttl_seconds` (default 3600) — how long a pending memory
+  candidate lives before it expires (clamped to 60 … 7 days).
 
 **Default paths** (no environment variables needed):
 
@@ -773,12 +915,13 @@ The same feedback/memory model runs on all four surfaces (see [Multi-agent
 surfaces & hook install](#multi-agent-surfaces--hook-install)). See
 [`exi feedback`](#exi-feedback--never-make-the-user-say-it-twice) above
 for the full model (zero-click capture loop, severity ladder, enforcement
-specs, pause approval flow, admin gate, Stop loop-guard) and [Automatic
-relevant-memory retrieval](#automatic-relevant-memory-retrieval). In short:
-the durable rule text is only ever the canonical wording the agent writes when
-resolving a candidate (or that you record by hand) — never the raw prompt —
-enforcement specs are a closed, declarative allow-list (never arbitrary code),
-and no hook ever calls an LLM, network, or metered API.
+specs, pause approval flow, admin gate, Stop loop-guard), [Automatic
+relevant-memory retrieval](#automatic-relevant-memory-retrieval), and
+[Autonomous durable-memory capture](#autonomous-durable-memory-capture). In
+short: the durable rule/memory text is only ever the canonical wording the agent
+writes when resolving a candidate (or that you record by hand) — never the raw
+prompt — enforcement specs are a closed, declarative allow-list (never arbitrary
+code), and no hook ever calls an LLM, network, or metered API.
 
 ---
 
@@ -803,6 +946,28 @@ and no hook ever calls an LLM, network, or metered API.
   happens — no candidate, no injection — and you can still `exi feedback record`
   by hand. It runs with **no** model/API call, so it cannot reason about intent
   the way an LLM would.
+- **Autonomous memory capture depends on the model's judgment.** There is no
+  trigger-word detector by design (requiring a magic phrase would just be manual
+  saving). The hook only *invites* the agent to assess each turn; whether a
+  durable fact is actually recorded — and whether the canonical claim, scope,
+  and kind are well-chosen — is up to the active model. A weak model may miss a
+  worthwhile memory or mis-classify a technical fact as a preference. Nothing is
+  auto-promoted into `AGENTS.md`/`CLAUDE.md`/skills; `exi audit` and
+  `exi list --status active` and `exi list --status confirmed` let a human
+  review what was captured.
+- **The secret rejecter is a conservative heuristic, not a scanner.** It refuses
+  clear credential shapes (known token prefixes, private-key headers, keyword=
+  long-value assignments) but is not a guarantee against every possible secret;
+  it is a backstop on top of "the claim is agent-authored, not copied from the
+  prompt, and no raw prompt is ever persisted."
+- **Candidate binding cannot eliminate model prompt injection.** The injected
+  policy explicitly tells the active model to ignore instructions found in
+  repository files and tool output when deciding what to remember, and
+  technical memories still need two actual cited sources. However, without
+  storing the raw conversation or calling a separate trusted classifier, the
+  CLI cannot cryptographically prove why the model issued a valid
+  candidate-bound command. Treat the local observation store as auditable state
+  (`exi list` / `exi audit`), not as an infallible security boundary.
 - **Automatic memory retrieval is lexical, not semantic.** Ranking is
   deterministic word/CJK-ngram/trigger/scope overlap plus FTS — it has no
   synonym or paraphrase understanding, again by design (no embeddings, no
@@ -850,6 +1015,27 @@ raw prompt reaches any durable or state file, and memory relevance ranking
 (English + CJK), scope handling, stale/candidate/retired filtering, result/char
 bounds, and empty/corrupt fail-open.
 
+Autonomous durable-memory capture adds: the store trust model (user-authoritative
+`active` on a single source vs evidence-disciplined `confirmed` needing two
+actual independent sources, turn-provenance excluded from technical evidence,
+later-confirmation, active-never-downgraded,
+normalized-claim dedup, no-inflation on duplicate source, kind validation), the
+body-less memory-candidate lifecycle (idempotent upsert, no prompt body,
+expiry, provider-namespaced isolation, per-claim resolution tracking), secret
+rejection (known token shapes + keyword-assignments rejected, ordinary/CJK prose
+passed, reasons never echo the secret), the `exi memory resolve/dismiss/
+candidates` CLI (preference→active, technical evidence required, idempotent
+re-resolve, multiple distinct memories per turn, unknown/expired/session-
+mismatch/dismissed handling, transient-only dismiss reasons, secret-claim
+rejection, resolve-cannot-alter-existing, `list --status active`), and the per-turn
+instruction on **all four surfaces** — Codex, Claude, Copilot VS Code, and the
+transformedPrompt-only Copilot CLI (verbatim-then-append) — plus candidate-id
+agreement between hook and CLI, cross-provider candidate isolation, the combined
+feedback+memory single-document shape, a data-dir scan proving no secret/raw
+prompt is persisted on any surface, no Stop-block on an ordinary turn,
+ASCII-safe output, `memory.auto_capture=false` disabling, and the total-context
+bound.
+
 The multi-agent work adds meaningful cross-platform coverage: the cross-platform
 lock helper (POSIX backend + a **simulated Windows backend** driven by a fake
 `msvcrt` on the POSIX runner — single-byte lock/retry/release), a check that no
@@ -880,7 +1066,7 @@ to run on Linux.
 ## Layout
 
 ```
-codex-feedback-guard/
+agent-steward/
 ├── bin/{exi,codex-guard}      # dev-mode launchers for exi/codex-guard (console scripts preferred)
 ├── exi/                       # package
 │   ├── feedback_core.py       #   provider-neutral policy engine
@@ -890,6 +1076,7 @@ codex-feedback-guard/
 │   ├── hookgen.py             #   installers/generators (Claude / Copilot)
 │   ├── hookmerge.py           #   Codex hooks.json merge
 │   ├── locking.py             #   cross-platform advisory lock (fcntl / msvcrt)
+│   ├── secretscan.py          #   secret/credential rejecter for durable memory
 │   ├── store.py feedback.py feedback_detect.py guard.py guardcli.py hook.py managed_run.py quota.py config.py
 │   └── config.default.json    #   packaged defaults (package data)
 ├── tests/                     # unittest suite (runs on Linux 3.11-3.13 + Windows 3.11/3.13)

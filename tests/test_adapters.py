@@ -49,6 +49,13 @@ class AdapterBase(unittest.TestCase):
     def state(self):
         return fb.FeedbackState(data_dir=self.tmp.name)
 
+    def _disable_auto_capture(self):
+        """Isolate a test from the always-on per-turn memory-capture instruction."""
+        cfg_path = os.path.join(self.tmp.name, "cfg.json")
+        with open(cfg_path, "w") as f:
+            json.dump({"memory": {"auto_capture": False}}, f)
+        os.environ["EXI_CONFIG"] = cfg_path
+
 
 # --------------------------------------------------------------------------- #
 # Claude Code
@@ -158,12 +165,16 @@ class CopilotCliAdapterTest(AdapterBase):
         self.assertTrue(out.isascii())
 
     def test_no_context_returns_empty_object(self):
+        # With the always-on memory-capture instruction disabled, a truly empty
+        # turn still yields {} (nothing to add) — the CLI verbatim contract.
+        self._disable_auto_capture()
         out, _ = self.dispatch("copilot-cli", "userPromptTransformed",
                                {"sessionId": "s1", "prompt": "just a normal question?",
                                 "transformedPrompt": "TP"})
         self.assertEqual(json.loads(out), {})
 
     def test_pascalcase_event_alias_accepted(self):
+        self._disable_auto_capture()
         out, _ = self.dispatch("copilot-cli", "UserPromptTransformed",
                                {"sessionId": "s1", "prompt": "normal", "transformedPrompt": "TP"})
         self.assertEqual(json.loads(out), {})
