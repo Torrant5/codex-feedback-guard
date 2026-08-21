@@ -1,14 +1,16 @@
 # Contributing
 
-Thanks for considering a contribution to `codex-feedback-guard`. This is a
-small, unofficial, community-maintained project — not affiliated with or
-endorsed by OpenAI or Anthropic.
+Thanks for considering a contribution to Agent Steward (Python distribution name
+`codex-feedback-guard`, kept for backward compatibility — see the README's
+[Naming](README.md#naming) note). This is a small, unofficial,
+community-maintained project — not affiliated with or endorsed by OpenAI,
+GitHub, or Anthropic.
 
 ## Getting started
 
 ```bash
-git clone https://github.com/Torrant5/codex-feedback-guard.git
-cd codex-feedback-guard
+git clone https://github.com/Torrant5/agent-steward.git
+cd agent-steward
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 

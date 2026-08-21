@@ -1,12 +1,31 @@
-# codex-feedback-guard
+# Agent Steward
+
+> A provider-neutral local continuity, memory, feedback, and safety layer for
+> AI coding agents.
 
 **Unofficial, community-maintained project. Not affiliated with, endorsed
 by, or supported by OpenAI, GitHub, or Anthropic.** The product names below
 (OpenAI Codex CLI, Anthropic Claude Code, GitHub Copilot) refer to those
 tools' hook systems, which this project integrates with as an external tool —
-it does not modify or redistribute any of them. (The package/CLI keep the
-`codex-*`/`exi` names for backward compatibility; the feedback/memory engine is
-provider-neutral.)
+it does not modify or redistribute any of them. (The distribution/CLI keep the
+`codex-*`/`exi` names for backward compatibility — see [Naming](#naming)
+below; the feedback/memory engine is provider-neutral.)
+
+## Naming
+
+This project's display name is **Agent Steward**; the GitHub repository is
+[`Torrant5/agent-steward`](https://github.com/Torrant5/agent-steward). For
+existing installs, nothing under the hood changes: the Python distribution
+name stays `codex-feedback-guard`, the console scripts stay
+`exi` / `exi-hook` / `codex-guard`, the on-disk data/config directories stay
+named `codex-feedback-guard` (see [Configuration](#configuration)), hook
+identifiers are unchanged, and the `EXI_*` environment variables
+(`EXI_CONFIG`, `EXI_DATA_DIR`, etc.) are unchanged. Only the repository
+location and the project's public name have changed. Existing clones and
+virtual environments do **not** need to be renamed: GitHub redirects the old
+repository URL, and the old local folder names continue to work. The install
+examples below use the new names; when updating an existing install, keep using
+the paths where it is already installed.
 
 Standard-library-only tools that share one design goal: make agent work
 **accountable** — knowledge is shared with evidence, recurring corrective
@@ -55,10 +74,10 @@ terminal has not activated the virtual environment and `exi-hook` is not on
 ### Recommended per-user install (macOS/Linux)
 
 ```bash
-EXI_SOURCE="$HOME/.local/src/codex-feedback-guard" \
-  && EXI_VENV="$HOME/.local/share/codex-feedback-guard-venv" \
+EXI_SOURCE="$HOME/.local/src/agent-steward" \
+  && EXI_VENV="$HOME/.local/share/agent-steward-venv" \
   && mkdir -p "$HOME/.local/src" "$HOME/.local/share" \
-  && git clone https://github.com/Torrant5/codex-feedback-guard.git "$EXI_SOURCE" \
+  && git clone https://github.com/Torrant5/agent-steward.git "$EXI_SOURCE" \
   && python3 -m venv "$EXI_VENV" \
   && "$EXI_VENV/bin/python" -m pip install "$EXI_SOURCE"
 ```
@@ -66,10 +85,10 @@ EXI_SOURCE="$HOME/.local/src/codex-feedback-guard" \
 Install only the surfaces you actually use:
 
 ```bash
-EXI_VENV="$HOME/.local/share/codex-feedback-guard-venv" \
+EXI_VENV="$HOME/.local/share/agent-steward-venv" \
   && "$EXI_VENV/bin/codex-guard" install-hooks
 
-EXI_VENV="$HOME/.local/share/codex-feedback-guard-venv" \
+EXI_VENV="$HOME/.local/share/agent-steward-venv" \
   && "$EXI_VENV/bin/exi-hook" install claude --scope user \
   --exe "$EXI_VENV/bin/exi-hook"
 ```
@@ -85,10 +104,10 @@ This is the recommended machine-wide setup for the stated Windows + Copilot
 VS Code use case. It needs Python 3.11+ and Git, but no administrator access:
 
 ```powershell
-$ExiSource = Join-Path $HOME "Tools\codex-feedback-guard"
-$ExiVenv = Join-Path $HOME ".codex-feedback-guard-venv"
+$ExiSource = Join-Path $HOME "Tools\agent-steward"
+$ExiVenv = Join-Path $HOME ".agent-steward-venv"
 New-Item -ItemType Directory -Force (Split-Path $ExiSource) | Out-Null
-git clone https://github.com/Torrant5/codex-feedback-guard.git $ExiSource
+git clone https://github.com/Torrant5/agent-steward.git $ExiSource
 py -m venv $ExiVenv
 & "$ExiVenv\Scripts\python.exe" -m pip install $ExiSource
 & "$ExiVenv\Scripts\exi-hook.exe" install copilot-vscode `
@@ -119,11 +138,20 @@ you give corrective feedback.
 
 ### Updating an existing install
 
+Set the source and virtual-environment variables to the directories that are
+actually present on that machine. The examples below show the new default
+names. An installation created from the older documentation normally uses
+`~/.local/src/codex-feedback-guard` and
+`~/.local/share/codex-feedback-guard-venv` on macOS/Linux, or
+`$HOME\Tools\codex-feedback-guard` and
+`$HOME\.codex-feedback-guard-venv` on Windows; keep those old values unless you
+have deliberately renamed the local directories.
+
 macOS/Linux:
 
 ```bash
-EXI_SOURCE="$HOME/.local/src/codex-feedback-guard" \
-  && EXI_VENV="$HOME/.local/share/codex-feedback-guard-venv" \
+EXI_SOURCE="$HOME/.local/src/agent-steward" \
+  && EXI_VENV="$HOME/.local/share/agent-steward-venv" \
   && git -C "$EXI_SOURCE" pull --ff-only \
   && "$EXI_VENV/bin/python" -m pip install --force-reinstall --no-deps "$EXI_SOURCE"
 ```
@@ -131,8 +159,8 @@ EXI_SOURCE="$HOME/.local/src/codex-feedback-guard" \
 Windows PowerShell:
 
 ```powershell
-$ExiSource = Join-Path $HOME "Tools\codex-feedback-guard"
-$ExiVenv = Join-Path $HOME ".codex-feedback-guard-venv"
+$ExiSource = Join-Path $HOME "Tools\agent-steward"
+$ExiVenv = Join-Path $HOME ".agent-steward-venv"
 git -C $ExiSource pull --ff-only
 & "$ExiVenv\Scripts\python.exe" -m pip install --force-reinstall --no-deps $ExiSource
 ```
@@ -147,8 +175,8 @@ For development, cloning anywhere permanent and installing editable is also
 supported:
 
 ```bash
-git clone https://github.com/Torrant5/codex-feedback-guard.git \
-  && cd codex-feedback-guard \
+git clone https://github.com/Torrant5/agent-steward.git \
+  && cd agent-steward \
   && python3 -m pip install -e .
 ```
 
@@ -172,7 +200,7 @@ required.
 
 ## Architecture and features
 
-Both tools share one package (`exi/`) and one config-loading layer
+The components share one package (`exi/`) and one config-loading layer
 (`exi/config.py`), but are otherwise independent:
 
 | Module | Responsibility |
@@ -1038,7 +1066,7 @@ to run on Linux.
 ## Layout
 
 ```
-codex-feedback-guard/
+agent-steward/
 ├── bin/{exi,codex-guard}      # dev-mode launchers for exi/codex-guard (console scripts preferred)
 ├── exi/                       # package
 │   ├── feedback_core.py       #   provider-neutral policy engine
