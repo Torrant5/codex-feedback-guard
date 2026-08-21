@@ -59,13 +59,24 @@ def extract_prompt(payload: dict) -> str:
 
     Handles the common documented shapes: a top-level ``prompt`` /
     ``user_prompt`` / ``message`` / ``input`` / ``text`` string (or an object /
-    list carrying ``text``/``content``), and a ``messages``/``input`` list of
-    role objects (the last user turn wins). Returns ``""`` when nothing
-    prompt-like is present. Never raises.
+    list carrying ``text``/``content``), Copilot CLI's transformed-prompt hook
+    payload, and a ``messages``/``input`` list of role objects (the last user
+    turn wins). Returns ``""`` when nothing prompt-like is present. Never
+    raises.
     """
     if not isinstance(payload, dict):
         return ""
-    for key in ("prompt", "user_prompt", "userPrompt", "message", "text", "content", "input"):
+    for key in (
+        "prompt",
+        "user_prompt",
+        "userPrompt",
+        "message",
+        "text",
+        "content",
+        "input",
+        "transformedPrompt",
+        "transformed_prompt",
+    ):
         if key in payload:
             s = _coerce(payload.get(key))
             if s:

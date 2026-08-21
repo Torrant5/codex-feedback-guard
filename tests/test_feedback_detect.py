@@ -12,6 +12,7 @@ class ExtractPromptTest(unittest.TestCase):
         self.assertEqual(fbd.extract_prompt({"message": "yo"}), "yo")
         self.assertEqual(fbd.extract_prompt({"input": "q"}), "q")
         self.assertEqual(fbd.extract_prompt({"text": "t"}), "t")
+        self.assertEqual(fbd.extract_prompt({"transformedPrompt": "tp"}), "tp")
 
     def test_nested_object_and_list(self):
         self.assertEqual(fbd.extract_prompt({"prompt": {"text": "deep"}}), "deep")
