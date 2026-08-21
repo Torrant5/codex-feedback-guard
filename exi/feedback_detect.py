@@ -142,14 +142,16 @@ def strip_code(text: str) -> str:
 _STRONG = [
     # --- Japanese ---
     (re.compile(r"二度と"), "prohibition"),
-    (re.compile(r"やめて|止めて"), "stop-directive"),
+    (re.compile(r"やめて|止めて|やめろ|止めろ"), "stop-directive"),
     (re.compile(r"勝手に"), "unauthorized"),
     (re.compile(r"しないで"), "prohibition"),
     (re.compile(r"前に?も(?:言|伝|お願い|頼)"), "repetition"),
     (re.compile(r"何度も(?:言|伝)"), "repetition"),
+    (re.compile(r"再三(?:言|伝|指摘|お願い|頼)"), "repetition"),
     (re.compile(r"また同じ"), "repetition"),
     (re.compile(r"そんな(?:面倒|めんどう)"), "refusal"),
     (re.compile(r"言った(?:よ|でしょ|はず|じゃん)"), "repetition"),
+    (re.compile(r"絶対に[^\n]{0,80}?(?:するな|やるな|しないで)"), "prohibition"),
     # --- English --- (matched case-insensitively)
     (re.compile(r"i(?:'ve| have| already)?\s+(?:told|said)\s+you", re.I), "repetition"),
     (re.compile(r"i\s+said\s+(?:not\s+to|don'?t)", re.I), "prohibition"),

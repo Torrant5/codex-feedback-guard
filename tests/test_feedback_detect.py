@@ -65,6 +65,10 @@ class DetectorPositiveTest(unittest.TestCase):
     POSITIVE = [
         "二度と勝手にコミットしないで",
         "前にも言ったよね、やめて",
+        "何度も言っているが、勝手に変更しないで",
+        "再三言っているが、その操作はやめろ",
+        "絶対にほげするな",
+        "この操作は止めろ",
         "そんな面倒なことできない",
         "また同じミスをしている",
         "I already told you not to do that",
